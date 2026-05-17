@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+venv.bak/
+
+# Environment / secrets
+.env
+.env.*
+secrets.env
+*.pem
+*.key
+aws_credentials
+
+# Byte-compiled / cache
+.pytest_cache/
+.mypy_cache/
+.cache/
+
+# VSCode
+.vscode/
+
+# Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# AI / ML artifacts
+# model weights / checkpoints
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.h5
+*.model
+*.weights
+
+# Model / training folders
+models/
+trained_models/
+checkpoints/
+weights/
+
+# Data, datasets, large outputs
+data/
+datasets/
+outputs/
+exports/
+
+# Experiment tracking and logs
+wandb/
+mlruns/
+tensorboard/
+runs/
+logs/
+*.log
+
+# Hugging Face caches and folders
+huggingface/
+.huggingface/
+transformers_cache/
+hf_data_cache/
+
+# Large archives and build artifacts
+*.tar.gz
+*.zip
+*.tar
+
+# Docker
+docker-compose.override.yml
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# Docs (optional local notes)
+CLAUDE.md
+lessons.md
+todo.md
