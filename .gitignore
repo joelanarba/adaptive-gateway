@@ -42,11 +42,10 @@ aws_credentials
 *.safetensors
 *.bin
 *.h5
-*.model
 *.weights
 
 # Model / training folders
-models/
+
 trained_models/
 checkpoints/
 weights/
