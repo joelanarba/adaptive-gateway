@@ -1,0 +1,11 @@
+# Build context is ./gateway. Keep the image lean.
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+.env
+.env.*
+*.md

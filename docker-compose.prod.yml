@@ -1,0 +1,83 @@
+# Production overrides for the Adaptive API Gateway.
+#
+# Apply on top of the base compose file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Only production deltas live here — anything not overridden is inherited from
+# docker-compose.yml (networks, healthchecks, named data volumes, etc.).
+# Note: no top-level `version:` key — it is obsolete under Compose v2.
+
+services:
+
+  gateway:
+    # Run the baked image, not live source. Override the dev bind-mount with an
+    # empty list so /app is the code copied in at build time.
+    volumes: []
+    environment:
+      # Force production behaviour regardless of what .env carries.
+      ENVIRONMENT: production
+    restart: always
+    # Cap resources for a small EC2 t2.micro (1 vCPU / 1 GiB).
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: "0.75"
+
+  nginx:
+    # Production config terminates TLS and proxies to the gateway.
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      # Let's Encrypt certificates issued/renewed by certbot.
+      - ./certbot/conf:/etc/letsencrypt:ro
+      # ACME http-01 challenge webroot (read-only for nginx).
+      - ./certbot/www:/var/www/certbot:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: always
+
+  # Certbot companion for issuing/renewing Let's Encrypt certs via the webroot
+  # plugin. Disabled by default — uncomment, set your domain/email, and run a
+  # one-off issuance first:
+  #
+  #   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm \
+  #     certbot certonly --webroot -w /var/www/certbot \
+  #     -d gateway.example.com --email you@example.com --agree-tos --no-eff-email
+  #
+  # Once enabled, the container loops and renews every 12h; reload nginx after
+  # a successful renewal (e.g. via cron: docker compose exec nginx nginx -s reload).
+  #
+  # certbot:
+  #   image: certbot/certbot:latest
+  #   container_name: certbot
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./certbot/conf:/etc/letsencrypt
+  #     - ./certbot/www:/var/www/certbot
+  #   entrypoint: >-
+  #     /bin/sh -c "trap exit TERM;
+  #     while :; do certbot renew --webroot -w /var/www/certbot;
+  #     sleep 12h & wait $${!}; done"
+  #   networks:
+  #     - gateway-net
+
+  redis:
+    # Data volume (redis-data) is inherited from the base file.
+    restart: always
+    mem_limit: 384m
+    mem_reservation: 256m
+
+  postgres:
+    # Data volume (postgres-data) is inherited from the base file.
+    restart: always
+    mem_limit: 512m
+    mem_reservation: 256m
+
+  prometheus:
+    restart: unless-stopped
+
+  grafana:
+    restart: unless-stopped
+    environment:
+      # Admin password sourced from the environment; never bake a default in prod.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"

@@ -1,0 +1,34 @@
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["gateway"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = isort, B = flake8-bugbear,
+# UP = pyupgrade. E501 (line too long) is intentionally not ignored;
+# black is responsible for wrapping lines.
+select = ["E", "F", "I", "B", "UP", "W"]
+# B008: calling Depends()/Query() in argument defaults is the idiomatic FastAPI
+# dependency-injection pattern, not a bug.
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports in package __init__ files are not "unused".
+"__init__.py" = ["F401"]
+# conftest sets env vars / sys.path before importing the app under test.
+"gateway/tests/conftest.py" = ["E402"]
+# Auto-generated Alembic migrations are not linted.
+"gateway/migrations/*" = ["E", "F", "I", "B", "UP", "W"]
+
+[tool.pytest.ini_options]
+pythonpath = ["gateway"]
+asyncio_mode = "auto"
+testpaths = ["gateway/tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
