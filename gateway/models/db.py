@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import AsyncGenerator, Optional
 
 from sqlalchemy import (
     JSON,
@@ -73,7 +73,7 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+    refresh_tokens: Mapped[list[RefreshToken]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -90,12 +90,12 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     # Set when this token is rotated, pointing at its successor (audit trail).
-    replaced_by: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    replaced_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
-    user: Mapped["User"] = relationship(back_populates="refresh_tokens")
+    user: Mapped[User] = relationship(back_populates="refresh_tokens")
 
 
 class APIKey(Base):
@@ -105,14 +105,14 @@ class APIKey(Base):
     name: Mapped[str] = mapped_column(String(128))
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     prefix: Mapped[str] = mapped_column(String(12), index=True)
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+    last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -129,14 +129,14 @@ class RequestLog(Base):
     cache_status: Mapped[str] = mapped_column(String(16))
     status_code: Mapped[int] = mapped_column(Integer)
     rtt_ms: Mapped[float] = mapped_column(Float)
-    upstream_latency_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    response_size_original: Mapped[Optional[int]] = mapped_column(
+    upstream_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    response_size_original: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
-    response_size_optimized: Mapped[Optional[int]] = mapped_column(
+    response_size_optimized: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
-    client_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
@@ -151,11 +151,11 @@ class FailedRequest(Base):
     method: Mapped[str] = mapped_column(String(8))
     path: Mapped[str] = mapped_column(String(2048))
     headers: Mapped[dict] = mapped_column(JSON, default=dict)
-    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    client_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     retries: Mapped[int] = mapped_column(Integer, default=0)
-    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    queued_at: Mapped[Optional[datetime]] = mapped_column(
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
