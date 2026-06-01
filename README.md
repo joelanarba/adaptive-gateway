@@ -329,6 +329,41 @@ sudo python benchmarks/run_experiment.py \
 Results are written under `benchmarks/results/` and summarised as an
 adaptive-vs-baseline improvement table.
 
+### Multiple trials (mean ± stddev)
+
+A single run is noisy — latency percentiles and success rates wobble between
+runs under `netem` loss. For paper-grade numbers, `benchmarks/run_trials.py`
+wraps `run_experiment.py` and runs it several times, then aggregates the
+per-run CSVs to **mean ± sample standard deviation** per
+`(condition, system, metric)`. It shells out to `run_experiment.py` (the single
+source of truth for the experiment and `netem` logic) and forwards every flag
+verbatim **except** `--out` (it owns one per trial) and `--charts` (skipped).
+
+```bash
+# 5 trials (default), pure load test, no netem
+python benchmarks/run_trials.py --no-netem
+
+# 10 trials with netem against a baseline; extra flags pass through unchanged
+sudo python benchmarks/run_trials.py --trials 10 \
+  --target http://localhost:8000 --baseline http://localhost:9000 \
+  --interface eth0 --requests 1000 --concurrency 20
+```
+
+Own flags: `--trials` (default 5), `--runner` (path to `run_experiment.py`),
+`--results-dir`. Each trial is written to `benchmarks/results/runs/run_NN.csv`,
+and the aggregate lands in `benchmarks/results/aggregate.csv` in long format
+(`condition, system, metric, mean, stddev, trials`). The wrapper also prints a
+summary table and an adaptive-vs-baseline improvement table computed on the
+trial means. It is standard-library only (`csv`, `statistics`, `subprocess`);
+sample stddev uses `n-1` and is `0.0` for a single trial.
+
+The wrapper has a local unit test (no gateway stack required) that mocks the
+subprocess call:
+
+```bash
+python benchmarks/test_run_trials.py
+```
+
 ---
 
 ## Project structure
@@ -372,7 +407,7 @@ adaptive-gateway/
 ├── nginx/                          ← nginx.conf, nginx.prod.conf
 ├── prometheus/                     ← prometheus.yml scrape config
 ├── grafana/                        ← auto-provisioned datasource + dashboard
-├── benchmarks/                     ← run_experiment.py + results/
+├── benchmarks/                     ← run_experiment.py, run_trials.py + results/
 └── tasks/                          ← todo.md, lessons.md
 ```
 
