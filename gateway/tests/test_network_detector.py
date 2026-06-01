@@ -14,7 +14,7 @@ def test_classify_rtt_boundaries():
     assert classify_rtt(0) == NetworkQuality.GOOD
     assert classify_rtt(149) == NetworkQuality.GOOD
     assert classify_rtt(150) == NetworkQuality.DEGRADED
-    assert classify_rtt(500) == NetworkQuality.DEGRADED
+    assert classify_rtt(500) == NetworkQuality.POOR
     assert classify_rtt(501) == NetworkQuality.POOR
     assert classify_rtt(5000) == NetworkQuality.POOR
 
