@@ -109,6 +109,20 @@ async def _call_upstream(
         )
 
 
+# Strong refs to fire-and-forget background tasks. asyncio keeps only a weak ref
+# to a task, so a bare ``create_task`` result can be garbage-collected mid-flight
+# and silently dropped; retain it here and discard on completion.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    """Schedule a fire-and-forget coroutine while holding a strong reference."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 async def _refresh_cache(
     client: httpx.AsyncClient,
     key: str,
@@ -207,7 +221,7 @@ async def _handle_get(
         if await acquire_lock(
             f"revalidate:{cache_key}", settings.revalidate_lock_ttl_seconds
         ):
-            asyncio.create_task(
+            _spawn(
                 _refresh_cache(
                     client, cache_key, target, fwd_headers, service, rule.cache_ttl
                 )

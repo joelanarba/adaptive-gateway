@@ -139,3 +139,26 @@ async def test_stale_revalidation_is_single_flight(mock_upstream, client):
     # Release the parked refresh so it completes and frees the lock.
     gate.set()
     await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_spawn_retains_then_releases_task_reference():
+    # asyncio keeps only a weak ref to a task; _spawn must hold a strong ref while
+    # it runs (so it is not GC'd mid-flight) and drop it on completion.
+    from routes.proxy import _background_tasks, _spawn
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def work():
+        started.set()
+        await release.wait()
+
+    task = _spawn(work())
+    await started.wait()
+    assert task in _background_tasks  # strong ref held while pending
+
+    release.set()
+    await task
+    await asyncio.sleep(0)  # let the done-callback (discard) run
+    assert task not in _background_tasks
