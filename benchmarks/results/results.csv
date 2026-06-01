@@ -1,4 +1,7 @@
 condition,system,requests,success_rate,error_rate,p50_latency_ms,p95_latency_ms,p99_latency_ms,mean_size_bytes
-GOOD,adaptive,1000,1.0,0.0,507.47,836.62,922.65,27520.0
-DEGRADED,adaptive,1000,1.0,0.0,546.03,853.12,1780.88,7155.0
-POOR,adaptive,1000,1.0,0.0,502.0,720.3,1000.33,7155.0
+GOOD,adaptive,1000,1.0,0.0,374.72,536.15,576.92,27520.0
+GOOD,baseline,1000,0.992,0.008,179.43,1307.2,4260.49,27300.0
+DEGRADED,adaptive,1000,1.0,0.0,382.17,563.24,626.14,7155.0
+DEGRADED,baseline,1000,0.994,0.006,259.14,1092.11,5104.73,27354.9
+POOR,adaptive,1000,1.0,0.0,395.43,582.1,606.09,7155.0
+POOR,baseline,1000,0.997,0.003,1086.93,3611.78,6902.81,27437.4
