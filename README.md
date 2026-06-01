@@ -64,8 +64,8 @@ The middleware stack is registered outermost → innermost:
 | Tier       | Trigger (default thresholds)        | What the gateway does |
 |------------|-------------------------------------|------------------------|
 | `GOOD`     | link RTT `< 150 ms`                 | Pass the response through unchanged. |
-| `DEGRADED` | link RTT `150–500 ms`               | Strip the route's `optional_fields` from JSON, then gzip (if the client accepts it and the body is worth compressing). |
-| `POOR`     | link RTT `> 500 ms`                 | If a cached/stale copy was already served, return it (stripped + gzipped). Otherwise return a minimal **skeleton** (optional fields removed, arrays truncated) with HTTP `206` to signal a partial payload. |
+| `DEGRADED` | link RTT `≥ 150 and < 500 ms`       | Strip the route's `optional_fields` from JSON, then gzip (if the client accepts it and the body is worth compressing). |
+| `POOR`     | link RTT `≥ 500 ms`                 | If a cached/stale copy was already served, return it (stripped + gzipped). Otherwise return a minimal **skeleton** (optional fields removed, arrays truncated) with HTTP `206` to signal a partial payload. |
 
 Thresholds are configurable via `RTT_GOOD_THRESHOLD_MS` and
 `RTT_DEGRADED_THRESHOLD_MS`.
@@ -236,8 +236,8 @@ variables:
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | `gateway` / `gateway` / `gateway`                   | Postgres credentials. |
 | `DATABASE_URL`              | `postgresql+asyncpg://gateway:gateway@postgres:5432/gateway`  | Async DB DSN. |
 | `REDIS_URL`                 | `redis://redis:6379`                                          | Cache + offline queue. |
-| `RTT_GOOD_THRESHOLD_MS`     | `150`                                                         | Upper bound for `GOOD`. |
-| `RTT_DEGRADED_THRESHOLD_MS` | `500`                                                         | Upper bound for `DEGRADED`. |
+| `RTT_GOOD_THRESHOLD_MS`     | `150`                                                         | GOOD/DEGRADED boundary (RTT `< 150` is GOOD). |
+| `RTT_DEGRADED_THRESHOLD_MS` | `500`                                                         | DEGRADED/POOR boundary (RTT `≥ 500` is POOR). |
 | `UPSTREAM_SERVICES`         | `{"jsonplaceholder":"https://jsonplaceholder.typicode.com"}`  | JSON map of `service → base URL`. |
 | `ALLOWED_ORIGINS`           | `["http://localhost:3000","http://localhost:8000"]`           | CORS origins (JSON array). |
 | `RATE_LIMIT_ENABLED`        | `false`                                                       | Toggle the coarse global limiter. |

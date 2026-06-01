@@ -26,8 +26,8 @@ requests fold the observed link latency into that state — with dwell-band
 hysteresis and an N-consecutive-sample requirement (see ``rtt_state``) so the
 tier does not flap near a threshold — updating it for *future* requests.
 
-Thresholds (configurable in settings):
-  GOOD < 150ms ≤ DEGRADED ≤ 500ms < POOR
+Thresholds (configurable in settings), as half-open intervals:
+  GOOD [0, 150) · DEGRADED [150, 500) · POOR [500, ∞) ms
 """
 
 from __future__ import annotations
@@ -82,10 +82,11 @@ def _thresholds() -> Thresholds:
 
 
 def classify_rtt(rtt_ms: float) -> NetworkQuality:
-    """Classify a link RTT (ms) into a network quality tier."""
+    """Classify a link RTT (ms) into a tier using half-open intervals:
+    GOOD [0, 150) · DEGRADED [150, 500) · POOR [500, ∞)."""
     if rtt_ms < settings.rtt_good_threshold_ms:
         return NetworkQuality.GOOD
-    if rtt_ms <= settings.rtt_degraded_threshold_ms:
+    if rtt_ms < settings.rtt_degraded_threshold_ms:
         return NetworkQuality.DEGRADED
     return NetworkQuality.POOR
 
