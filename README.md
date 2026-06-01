@@ -307,8 +307,10 @@ size to CSV (with optional matplotlib charts and S3 upload).
 Methodology:
 
 - Network impairment is applied on a **real** interface with `tc netem`
-  (`delay`/`loss`), since netem does not work on loopback. `GOOD` is a clean
-  link, `DEGRADED` is `200ms / 1% loss`, `POOR` is `500ms / 5% loss`.
+  (`delay`/`loss`/`rate`), since netem does not work on loopback. `GOOD` is a clean
+  link, `DEGRADED` is `200ms / 1% loss / 1mbit`, `POOR` is `1000ms / 5% loss /
+  256kbit`. The `rate` caps make the payload-size reduction (the core result)
+  visible — under pure added delay a smaller body barely changes transfer time.
 - The tier is pinned deterministically via `X-Client-RTT` / `ECT` client hints
   so classification does not depend on noisy measured RTT — keeping runs
   reproducible.

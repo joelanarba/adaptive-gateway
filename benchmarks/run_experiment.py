@@ -50,11 +50,22 @@ import httpx
 #:
 #: ``rtt_ms``/``ect`` are sent as request headers so the gateway classifies the
 #: tier deterministically. ``netem`` is the ``tc qdisc ... netem`` argument list
-#: (``None`` means "no impairment", i.e. a clean link for GOOD).
+#: (``None`` means "no impairment", i.e. a clean link for GOOD). The ``rate`` cap
+#: on DEGRADED/POOR is what makes the payload-size reduction (the core result)
+#: visible: under pure added delay a smaller body barely changes transfer time,
+#: but under a constrained bandwidth it does.
 CONDITIONS: dict[str, dict[str, object]] = {
     "GOOD": {"rtt_ms": 50, "ect": "4g", "netem": None},
-    "DEGRADED": {"rtt_ms": 250, "ect": "3g", "netem": ["delay", "200ms", "loss", "1%"]},
-    "POOR": {"rtt_ms": 800, "ect": "2g", "netem": ["delay", "500ms", "loss", "5%"]},
+    "DEGRADED": {
+        "rtt_ms": 250,
+        "ect": "3g",
+        "netem": ["delay", "200ms", "loss", "1%", "rate", "1mbit"],
+    },
+    "POOR": {
+        "rtt_ms": 800,
+        "ect": "2g",
+        "netem": ["delay", "1000ms", "loss", "5%", "rate", "256kbit"],
+    },
 }
 
 CSV_FIELDS: list[str] = [
