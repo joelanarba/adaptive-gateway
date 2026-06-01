@@ -143,6 +143,21 @@ async def cache_delete(key: str) -> None:
     await get_redis().delete(key)
 
 
+async def acquire_lock(name: str, ttl_seconds: int) -> bool:
+    """Acquire a best-effort lock via ``SET NX EX``; return True iff acquired.
+
+    Used for single-flight stale revalidation: only the caller that wins the lock
+    refreshes the upstream, the rest serve stale. The TTL is the crash safety net
+    so a holder that dies never blocks future refreshes forever.
+    """
+    return bool(await get_redis().set(f"lock:{name}", "1", nx=True, ex=ttl_seconds))
+
+
+async def release_lock(name: str) -> None:
+    """Release a lock taken with :func:`acquire_lock`."""
+    await get_redis().delete(f"lock:{name}")
+
+
 async def ping() -> bool:
     try:
         return bool(await get_redis().ping())

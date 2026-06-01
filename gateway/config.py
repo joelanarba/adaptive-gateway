@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     cache_ttl_user: int = 60
     cache_ttl_realtime: int = 10
     cache_default_ttl: int = 60
+    # Single-flight stale revalidation: only the lock winner refreshes the
+    # upstream; the TTL is the crash safety net.
+    revalidate_lock_ttl_seconds: int = 10
 
     # --- Proxy ---
     upstream_timeout_seconds: float = 10.0

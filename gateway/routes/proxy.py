@@ -27,9 +27,11 @@ from fastapi import APIRouter, Request, Response
 from cache.redis_client import (
     CachedResponse,
     CacheStatus,
+    acquire_lock,
     build_cache_key,
     cache_get,
     cache_set,
+    release_lock,
 )
 from config import get_route_rule, settings
 from middleware.network_detector import NetworkQuality
@@ -115,7 +117,11 @@ async def _refresh_cache(
     service: str,
     fresh_for: int,
 ) -> None:
-    """Background revalidation for a stale cache entry."""
+    """Background revalidation for a stale cache entry.
+
+    Holds the single-flight ``revalidate:{key}`` lock for the duration and
+    releases it when done (the lock's TTL is the crash safety net).
+    """
     try:
         resp = await _call_upstream(
             client, "GET", url, headers, b"", service, settings.upstream_timeout_seconds
@@ -134,6 +140,8 @@ async def _refresh_cache(
             log.debug("cache.revalidated", key=key)
     except httpx.HTTPError as exc:
         log.warning("cache.revalidate_failed", key=key, error=str(exc))
+    finally:
+        await release_lock(f"revalidate:{key}")
 
 
 @router.api_route(
@@ -193,12 +201,17 @@ async def _handle_get(
     if status_ == CacheStatus.STALE and entry is not None:
         record_cache_event("stale")
         request.state.served_from_cache = True
-        # Serve stale now; revalidate in the background.
-        asyncio.create_task(
-            _refresh_cache(
-                client, cache_key, target, fwd_headers, service, rule.cache_ttl
+        # Serve stale now; revalidate in the background. Single-flight: only the
+        # lock winner refreshes — concurrent callers on a hot key just serve
+        # stale instead of each spawning a duplicate upstream call (stampede).
+        if await acquire_lock(
+            f"revalidate:{cache_key}", settings.revalidate_lock_ttl_seconds
+        ):
+            asyncio.create_task(
+                _refresh_cache(
+                    client, cache_key, target, fwd_headers, service, rule.cache_ttl
+                )
             )
-        )
         _log_request(request, "STALE", entry.status, len(entry.body), service)
         return _from_cache(entry, "STALE")
 
