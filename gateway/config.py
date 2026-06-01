@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # --- Network quality thresholds (milliseconds) ---
     rtt_good_threshold_ms: float = 150.0
     rtt_degraded_threshold_ms: float = 500.0
+    # Passive-classifier hysteresis (stops tier flapping near a threshold):
+    rtt_hysteresis_ms: float = 30.0  # dwell-band width (down = up - this)
+    rtt_transition_samples: int = 3  # consecutive samples before a tier change
+    rtt_ewma_alpha: float = 0.3  # EWMA smoothing of the passive estimate
+    rtt_state_ttl_seconds: int = 3600  # idle TTL for per-client Redis state
 
     # --- Auth / JWT ---
     jwt_algorithm: str = "HS256"

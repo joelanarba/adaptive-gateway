@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from cache.redis_client import get_redis
 from middleware.network_detector import NetworkQuality, classify_rtt
 
 
@@ -48,3 +51,37 @@ async def test_health_is_not_classified(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert "X-Network-Quality" not in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_passive_tier_read_from_shared_redis_state(client):
+    # With no client hints, the tier comes from the per-client state in Redis —
+    # shared across workers, not an in-process dict. Seed it as a prior worker
+    # would have, then a hint-less request must reflect it.
+    await get_redis().set(
+        "netq:9.9.9.9",
+        json.dumps(
+            {
+                "ewma": 300.0,
+                "tier": "DEGRADED",
+                "pending_tier": None,
+                "pending_count": 0,
+            }
+        ),
+    )
+    resp = await client.get(
+        "/proxy/does-not-exist/x", headers={"X-Forwarded-For": "9.9.9.9"}
+    )
+    assert resp.headers["X-Network-Quality"] == "DEGRADED"
+
+
+@pytest.mark.asyncio
+async def test_explicit_hint_does_not_write_passive_state(client):
+    # An explicit hint short-circuits classification and must not touch Redis,
+    # keeping the experiment / hot path free of round-trips.
+    resp = await client.get(
+        "/proxy/does-not-exist/x",
+        headers={"X-Client-RTT": "800", "X-Forwarded-For": "8.8.8.8"},
+    )
+    assert resp.headers["X-Network-Quality"] == "POOR"
+    assert await get_redis().get("netq:8.8.8.8") is None

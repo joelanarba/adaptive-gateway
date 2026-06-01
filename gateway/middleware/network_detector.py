@@ -6,23 +6,25 @@ attaches the result to ``request.state.network_quality`` *before* the response
 is generated, so the Response Optimizer (an inner middleware) can adapt the
 payload.
 
-Why a multi-signal approach
----------------------------
-True end-to-end RTT is not directly observable from inside an ASGI app, and the
-total request duration conflates client-link latency with upstream latency.
-So the tier used for adaptation is derived, in priority order, from:
+Signal priority
+---------------
+True end-to-end RTT is not observable from inside an ASGI app, so the tier is
+derived, in priority order, from:
 
   1. ``X-Client-RTT``  — RTT in ms measured and reported by the client.
   2. ``ECT``           — Effective Connection Type (browsers / mobile).
   3. ``Save-Data: on`` — explicit client request to conserve data → DEGRADED.
-  4. A per-client EWMA of recently observed link latency (passive estimate).
+  4. A per-client passive estimate (used only when no hint is present).
   5. Default GOOD when nothing is known.
 
-After the response, we compute an observed link-latency proxy
-(``total_elapsed - upstream_latency``, the upstream component being reported by
-the proxy via ``request.state.upstream_latency_ms``) and fold it into the
-per-client EWMA so subsequent requests adapt. This passive estimate is a known
-limitation — clients are encouraged to send ``X-Client-RTT``/``ECT``.
+Explicit hints (1–3) short-circuit with **no Redis I/O**, so the experiment and
+the hot path stay free of round-trips. Only the **passive** path (4) touches
+Redis: the per-client classification state (EWMA + hysteresis) lives under
+``netq:{client}`` so it is shared across workers (an in-process dict gives the
+same client different tiers on different workers). After the response, passive
+requests fold the observed link latency into that state — with dwell-band
+hysteresis and an N-consecutive-sample requirement (see ``rtt_state``) so the
+tier does not flap near a threshold — updating it for *future* requests.
 
 Thresholds (configurable in settings):
   GOOD < 150ms ≤ DEGRADED ≤ 500ms < POOR
@@ -30,6 +32,7 @@ Thresholds (configurable in settings):
 
 from __future__ import annotations
 
+import json
 import time
 from enum import Enum
 
@@ -38,7 +41,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from cache.redis_client import get_redis
 from config import settings
+from middleware.rtt_state import RttState, Thresholds, advance
 from utils.metrics import network_quality_counter, record_request
 
 log = structlog.get_logger()
@@ -62,11 +67,18 @@ ECT_MAP = {
 # Paths that are infrastructure, not client traffic — skip adaptation/metrics.
 _SKIP_PATHS = {"/health", "/metrics", "/favicon.ico"}
 
-# In-process EWMA of observed link latency (ms) per client identity. Survives
-# only within a worker process; sufficient for single-worker research runs.
-_EWMA_ALPHA = 0.3
-_client_rtt_ewma: dict[str, float] = {}
-_EWMA_MAX_CLIENTS = 10_000
+# Per-client passive-state key (shared across workers via Redis).
+_STATE_KEY = "netq:{}"
+
+
+def _thresholds() -> Thresholds:
+    return Thresholds(
+        good_ms=settings.rtt_good_threshold_ms,
+        degraded_ms=settings.rtt_degraded_threshold_ms,
+        hysteresis_ms=settings.rtt_hysteresis_ms,
+        transition_samples=settings.rtt_transition_samples,
+        alpha=settings.rtt_ewma_alpha,
+    )
 
 
 def classify_rtt(rtt_ms: float) -> NetworkQuality:
@@ -94,8 +106,8 @@ def _parse_float(value: str | None) -> float | None:
         return None
 
 
-def _classify_from_signals(request: Request) -> tuple[NetworkQuality, float | None]:
-    """Determine the pre-response tier and any explicit RTT, from client hints."""
+def _explicit_signal(request: Request) -> tuple[NetworkQuality, float | None] | None:
+    """Tier from an explicit client hint, or None if the request carries none."""
     client_rtt = _parse_float(request.headers.get("x-client-rtt"))
     if client_rtt is not None:
         return classify_rtt(client_rtt), client_rtt
@@ -107,26 +119,38 @@ def _classify_from_signals(request: Request) -> tuple[NetworkQuality, float | No
     if (request.headers.get("save-data") or "").lower() == "on":
         return NetworkQuality.DEGRADED, None
 
-    estimate = _client_rtt_ewma.get(_client_id(request))
-    if estimate is not None:
-        return classify_rtt(estimate), estimate
-
-    return NetworkQuality.GOOD, None
+    return None
 
 
-def _update_ewma(client: str, observed_ms: float) -> None:
-    if observed_ms < 0:
-        return
-    prev = _client_rtt_ewma.get(client)
-    updated = (
-        observed_ms
-        if prev is None
-        else (_EWMA_ALPHA * observed_ms + (1 - _EWMA_ALPHA) * prev)
+async def _load_state(client_id: str) -> RttState:
+    """Load a client's passive classification state from Redis (default if none)."""
+    raw = await get_redis().get(_STATE_KEY.format(client_id))
+    if raw:
+        try:
+            data = json.loads(raw)
+            return RttState(
+                ewma=data.get("ewma"),
+                tier=data.get("tier", NetworkQuality.GOOD.value),
+                pending_tier=data.get("pending_tier"),
+                pending_count=int(data.get("pending_count", 0)),
+            )
+        except (ValueError, TypeError):
+            pass
+    return RttState(tier=NetworkQuality.GOOD.value)
+
+
+async def _store_state(client_id: str, state: RttState) -> None:
+    payload = json.dumps(
+        {
+            "ewma": state.ewma,
+            "tier": state.tier,
+            "pending_tier": state.pending_tier,
+            "pending_count": state.pending_count,
+        }
     )
-    # Bound memory: drop the table if it grows unreasonably large.
-    if len(_client_rtt_ewma) > _EWMA_MAX_CLIENTS and client not in _client_rtt_ewma:
-        _client_rtt_ewma.clear()
-    _client_rtt_ewma[client] = updated
+    await get_redis().set(
+        _STATE_KEY.format(client_id), payload, ex=settings.rtt_state_ttl_seconds
+    )
 
 
 class NetworkDetectorMiddleware(BaseHTTPMiddleware):
@@ -136,7 +160,17 @@ class NetworkDetectorMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         start = time.monotonic()
-        quality, explicit_rtt = _classify_from_signals(request)
+        client_id = _client_id(request)
+        explicit = _explicit_signal(request)
+        # ``state`` is non-None only on the passive path (no explicit hint), which
+        # is the only path that reads/writes the shared Redis estimate.
+        state: RttState | None = None
+        if explicit is not None:
+            quality, explicit_rtt = explicit
+        else:
+            state = await _load_state(client_id)
+            quality = NetworkQuality(state.tier)
+            explicit_rtt = None
 
         request.state.network_quality = quality
         request.state.request_start = start
@@ -152,7 +186,12 @@ class NetworkDetectorMiddleware(BaseHTTPMiddleware):
             if explicit_rtt is not None
             else max(elapsed_ms - upstream_ms, 0.0)
         )
-        _update_ewma(_client_id(request), link_rtt_ms)
+
+        # Update the passive estimate for FUTURE requests (passive path only — an
+        # explicit hint means the client told us, so there is nothing to learn and
+        # the hot path stays Redis-free).
+        if state is not None:
+            await _store_state(client_id, advance(state, link_rtt_ms, _thresholds()))
 
         quality_value = quality.value
         response.headers["X-Network-Quality"] = quality_value

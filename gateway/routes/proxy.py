@@ -97,6 +97,7 @@ async def _call_upstream(
     body: bytes,
     service: str,
     timeout: float,
+    request: Request | None = None,
 ) -> httpx.Response:
     started = time.monotonic()
     try:
@@ -104,9 +105,13 @@ async def _call_upstream(
             method, url, headers=headers, content=body, timeout=timeout
         )
     finally:
-        gateway_upstream_latency_seconds.labels(upstream=service).observe(
-            time.monotonic() - started
-        )
+        elapsed = time.monotonic() - started
+        gateway_upstream_latency_seconds.labels(upstream=service).observe(elapsed)
+        # Record the upstream component so the detector can isolate the client
+        # link RTT (elapsed - upstream). Background refreshes pass no request.
+        if request is not None:
+            prior = getattr(request.state, "upstream_latency_ms", None) or 0.0
+            request.state.upstream_latency_ms = prior + elapsed * 1000.0
 
 
 # Strong refs to fire-and-forget background tasks. asyncio keeps only a weak ref
@@ -240,6 +245,7 @@ async def _handle_get(
             b"",
             service,
             rule.upstream_timeout or settings.upstream_timeout_seconds,
+            request=request,
         )
     except httpx.HTTPError as exc:
         log.warning("proxy.upstream_error", service=service, error=str(exc))
@@ -285,7 +291,7 @@ async def _handle_write(
     client = _http(request)
     try:
         resp = await _call_upstream(
-            client, request.method, target, fwd_headers, body, service, timeout
+            client, request.method, target, fwd_headers, body, service, timeout, request
         )
     except (httpx.TimeoutException, httpx.ConnectError) as exc:
         # Durable: queue the write for replay rather than failing the client.

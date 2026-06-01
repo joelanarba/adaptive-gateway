@@ -36,7 +36,6 @@ if not settings.redis_url.rstrip("/").endswith("/15"):
 from sqlalchemy import text  # noqa: E402
 
 import cache.redis_client as redis_client  # noqa: E402
-import middleware.network_detector as network_detector  # noqa: E402
 from models.db import engine, init_models  # noqa: E402
 
 redis_client._redis = None  # force re-create against DB 15
@@ -72,9 +71,8 @@ async def _clean_state():
             text(f"TRUNCATE {', '.join(_TABLES)} RESTART IDENTITY CASCADE")
         )
     await redis_client.get_redis().flushdb()
-    # The detector's passive RTT estimate is in-process state — reset it so the
-    # per-client history from one test doesn't leak into the next.
-    network_detector._client_rtt_ewma.clear()
+    # The detector's passive RTT state now lives in Redis (netq:*), already wiped
+    # by the flushdb above — there is no in-process state left to reset.
     yield
 
 
