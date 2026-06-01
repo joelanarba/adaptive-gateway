@@ -130,12 +130,8 @@ class RequestLog(Base):
     status_code: Mapped[int] = mapped_column(Integer)
     rtt_ms: Mapped[float] = mapped_column(Float)
     upstream_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
-    response_size_original: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
-    response_size_optimized: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
+    response_size_original: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_size_optimized: Mapped[int | None] = mapped_column(Integer, nullable=True)
     client_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
