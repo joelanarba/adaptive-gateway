@@ -72,6 +72,12 @@ gateway_cache_events_total = Counter(
     ["result"],  # hit | miss | stale
 )
 
+# --- Research log rows dropped because the async writer queue was full ---
+gateway_request_log_dropped_total = Counter(
+    "gateway_request_log_dropped_total",
+    "RequestLog rows dropped (writer queue full) — shed under extreme load.",
+)
+
 # Internal running tallies for the hit-rate gauge.
 _cache_hits = 0
 _cache_total = 0

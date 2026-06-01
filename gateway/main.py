@@ -32,6 +32,7 @@ from middleware.response_optimizer import ResponseOptimizerMiddleware
 from models.db import init_models
 from offline_queue.sync_worker import SyncWorker
 from routes import admin, auth, proxy
+from utils.request_logger import get_log_writer
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 structlog.configure(
@@ -65,11 +66,18 @@ async def lifespan(app: FastAPI):
     worker = SyncWorker()
     worker.start()
     app.state.sync_worker = worker
+
+    # Batch RequestLog writer — keeps DB logging off the request path.
+    log_writer = get_log_writer()
+    log_writer.start()
+    app.state.request_log_writer = log_writer
+
     log.info("gateway.startup", env=settings.environment, version=settings.version)
     try:
         yield
     finally:
         await worker.stop()
+        await log_writer.stop()
         await app.state.http_client.aclose()
         await close_redis()
         log.info("gateway.shutdown")

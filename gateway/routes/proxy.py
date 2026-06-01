@@ -33,9 +33,9 @@ from cache.redis_client import (
 )
 from config import get_route_rule, settings
 from middleware.network_detector import NetworkQuality
-from models.db import AsyncSessionLocal, RequestLog
 from offline_queue.sync_worker import enqueue_write
 from utils.metrics import gateway_upstream_latency_seconds, record_cache_event
+from utils.request_logger import enqueue_log
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -187,7 +187,7 @@ async def _handle_get(
     if status_ == CacheStatus.HIT and entry is not None:
         record_cache_event("hit")
         request.state.served_from_cache = True
-        await _log_request(request, "HIT", entry.status, len(entry.body), service)
+        _log_request(request, "HIT", entry.status, len(entry.body), service)
         return _from_cache(entry, "HIT")
 
     if status_ == CacheStatus.STALE and entry is not None:
@@ -199,7 +199,7 @@ async def _handle_get(
                 client, cache_key, target, fwd_headers, service, rule.cache_ttl
             )
         )
-        await _log_request(request, "STALE", entry.status, len(entry.body), service)
+        _log_request(request, "STALE", entry.status, len(entry.body), service)
         return _from_cache(entry, "STALE")
 
     # MISS — go to the upstream.
@@ -216,7 +216,7 @@ async def _handle_get(
         )
     except httpx.HTTPError as exc:
         log.warning("proxy.upstream_error", service=service, error=str(exc))
-        await _log_request(request, "MISS", 503, 0, service)
+        _log_request(request, "MISS", 503, 0, service)
         return Response(
             content='{"detail":"upstream unavailable"}',
             status_code=503,
@@ -235,7 +235,7 @@ async def _handle_get(
             ),
         )
 
-    await _log_request(request, "MISS", resp.status_code, len(resp.content), service)
+    _log_request(request, "MISS", resp.status_code, len(resp.content), service)
     headers = _response_headers(resp)
     headers["X-Cache-Status"] = "MISS"
     return Response(
@@ -271,7 +271,7 @@ async def _handle_write(
             client_id=getattr(request.state, "user_id", None) or _client_ip(request),
         )
         log.info("proxy.write_queued", service=service, msg_id=msg_id, error=str(exc))
-        await _log_request(request, "QUEUED", 202, 0, service)
+        _log_request(request, "QUEUED", 202, 0, service)
         return Response(
             content='{"detail":"upstream unavailable; write queued for retry"}',
             status_code=202,
@@ -280,14 +280,14 @@ async def _handle_write(
         )
     except httpx.HTTPError as exc:
         log.warning("proxy.upstream_error", service=service, error=str(exc))
-        await _log_request(request, "ERROR", 502, 0, service)
+        _log_request(request, "ERROR", 502, 0, service)
         return Response(
             content='{"detail":"bad gateway"}',
             status_code=502,
             media_type="application/json",
         )
 
-    await _log_request(request, "PASS", resp.status_code, len(resp.content), service)
+    _log_request(request, "PASS", resp.status_code, len(resp.content), service)
     headers = _response_headers(resp)
     headers["X-Cache-Status"] = "PASS"
     return Response(
@@ -310,36 +310,32 @@ def _from_cache(entry: CachedResponse, cache_status: str) -> Response:
     )
 
 
-async def _log_request(
+def _log_request(
     request: Request,
     cache_status: str,
     status_code: int,
     size: int,
     service: str,
 ) -> None:
-    """Persist a research log row (best-effort — never fail the request)."""
+    """Enqueue a research log row off the request path (sync, non-blocking).
+
+    Snapshots the needed request state synchronously and hands a plain dict to
+    the background writer; never awaits, never raises, never blocks the response.
+    """
     quality = getattr(request.state, "network_quality", NetworkQuality.GOOD)
     start = getattr(request.state, "request_start", None)
     elapsed_ms = (time.monotonic() - start) * 1000.0 if start else 0.0
-    try:
-        async with AsyncSessionLocal() as session:  # type: AsyncSession
-            session.add(
-                RequestLog(
-                    method=request.method,
-                    path=request.url.path,
-                    network_quality=(
-                        quality.value
-                        if isinstance(quality, NetworkQuality)
-                        else str(quality)
-                    ),
-                    cache_status=cache_status,
-                    status_code=status_code,
-                    rtt_ms=elapsed_ms,
-                    response_size_original=size,
-                    client_id=getattr(request.state, "user_id", None)
-                    or _client_ip(request),
-                )
-            )
-            await session.commit()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("proxy.log_failed", error=str(exc))
+    enqueue_log(
+        {
+            "method": request.method,
+            "path": request.url.path,
+            "network_quality": (
+                quality.value if isinstance(quality, NetworkQuality) else str(quality)
+            ),
+            "cache_status": cache_status,
+            "status_code": status_code,
+            "rtt_ms": elapsed_ms,
+            "response_size_original": size,
+            "client_id": getattr(request.state, "user_id", None) or _client_ip(request),
+        }
+    )
