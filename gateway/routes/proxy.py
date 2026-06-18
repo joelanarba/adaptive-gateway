@@ -4,7 +4,7 @@ Core reverse proxy.
 Path shape: ``/proxy/{service}/{path...}`` where ``{service}`` resolves to a
 base URL in ``settings.upstream_services``.
 
-Behavior (CLAUDE.md):
+Behavior:
 - GET: stale-while-revalidate cache. Serve cache first; refresh stale entries in
   the background; only GETs are cached, never auth endpoints.
 - Writes (POST/PUT/DELETE/PATCH): forwarded; on upstream *timeout* the write is

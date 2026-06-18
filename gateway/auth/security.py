@@ -2,7 +2,7 @@
 Cryptographic helpers: password hashing, JWT access tokens, and opaque
 refresh/API tokens.
 
-Rules (from CLAUDE.md):
+Rules:
 - Passwords: bcrypt, work factor 12.
 - Access token TTL 15 min; refresh token TTL 7 days, stored server-side
   (we persist only a SHA-256 hash so a DB leak does not expose live tokens).

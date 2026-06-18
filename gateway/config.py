@@ -6,8 +6,8 @@ pydantic-settings. Import the singleton ``settings`` everywhere — never read
 ``os.environ`` directly.
 
 Per-route optimization rules (cache TTL, strippable fields) live here as well,
-because the Response Optimizer and proxy must agree on them and CLAUDE.md
-mandates they be declared in config rather than hardcoded in middleware.
+because the Response Optimizer and proxy must agree on them and they
+must be declared in config rather than hardcoded in middleware.
 """
 
 from __future__ import annotations

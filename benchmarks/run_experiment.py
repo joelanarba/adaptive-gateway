@@ -6,8 +6,8 @@ the gateway (and, optionally, a plain-FastAPI baseline) under simulated network
 conditions and records latency / success / response-size statistics for the
 ACM COMPASS paper.
 
-Network conditions are simulated on a real interface with ``tc netem`` (see
-CLAUDE.md). The gateway is told which tier to apply via client-hint headers
+Network conditions are simulated on a real interface with ``tc netem``.
+The gateway is told which tier to apply via client-hint headers
 (``X-Client-RTT`` and ``ECT``) so classification is deterministic and does not
 depend on measured RTT, which keeps the experiment reproducible.
 
@@ -186,7 +186,7 @@ def setup_netem(interface: str, condition: str) -> None:
     if interface == "lo":
         print(
             "  WARNING: tc netem does not work on the loopback interface (lo). "
-            "Use a real interface such as eth0 (see CLAUDE.md)."
+            "Use a real interface such as eth0."
         )
     print(
         "  NOTE: tc netem requires root privileges (run with sudo) and a real "

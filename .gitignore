@@ -34,7 +34,7 @@ aws_credentials
 .ipynb_checkpoints/
 *.ipynb
 
-# AI / ML artifacts
+# Machine Learning artifacts
 # model weights / checkpoints
 *.ckpt
 *.pt
@@ -84,5 +84,6 @@ Thumbs.db
 
 # Docs (optional local notes)
 CLAUDE.md
+.claude/
 lessons.md
 todo.md

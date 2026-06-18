@@ -10,7 +10,7 @@ stale-while-revalidate:
   background refresh runs.
 - ``cache_get`` returns the envelope plus whether it is fresh, stale, or absent.
 
-Cache key format (per CLAUDE.md): ``cache:{method}:{path}:{sorted_query_hash}``.
+Cache key format: ``cache:{method}:{path}:{sorted_query_hash}``.
 """
 
 from __future__ import annotations

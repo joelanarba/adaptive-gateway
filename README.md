@@ -370,7 +370,7 @@ python benchmarks/test_run_trials.py
 
 ```
 adaptive-gateway/
-├── CLAUDE.md                       ← project context for Claude Code
+├── ARCHITECTURE.md                 ← project architecture
 ├── README.md                       ← you are here
 ├── docker-compose.yml              ← local dev (all services)
 ├── .env.example                    ← copy to .env

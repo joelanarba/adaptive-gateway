@@ -5,7 +5,7 @@ Adapts the response payload to the client's network quality tier. Runs as the
 innermost middleware so it operates on the route's raw response while still
 seeing ``request.state.network_quality`` (set by the outer NetworkDetector).
 
-Per CLAUDE.md:
+Behavior:
   GOOD     — return unchanged.
   DEGRADED — strip the route's ``optional_fields`` from JSON, then gzip.
   POOR     — if a cached/stale body was already served, leave it (and gzip);

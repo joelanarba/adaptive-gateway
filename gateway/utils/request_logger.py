@@ -1,7 +1,7 @@
 """
 Off-request-path RequestLog writer.
 
-CLAUDE.md requires a research log row per proxied request, but writing it inline
+We require a research log row per proxied request, but writing it inline
 (open a session + INSERT + commit before responding) puts a Postgres round-trip
 on the hot path and makes DB-connection demand scale with total traffic. Under a
 1000-request benchmark that both inflates latency and exhausts the connection cap.
