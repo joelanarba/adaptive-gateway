@@ -12,7 +12,8 @@ services:
   gateway:
     # Run the baked image, not live source. Override the dev bind-mount with an
     # empty list so /app is the code copied in at build time.
-    volumes: []
+    volumes:
+      - ./gateway.yaml:/app/gateway.yaml:ro
     environment:
       # Force production behaviour regardless of what .env carries.
       ENVIRONMENT: production

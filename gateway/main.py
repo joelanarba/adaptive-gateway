@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cache.redis_client import close_redis
-from config import settings
+from config import ROUTE_RULES, get_loaded_yaml_path, settings
 from middleware.auth import AuthMiddleware
 from middleware.network_detector import NetworkDetectorMiddleware
 from middleware.rate_limit import RateLimitMiddleware
@@ -72,7 +72,13 @@ async def lifespan(app: FastAPI):
     log_writer.start()
     app.state.request_log_writer = log_writer
 
-    log.info("gateway.startup", env=settings.environment, version=settings.version)
+    log.info(
+        "gateway.startup",
+        env=settings.environment,
+        version=settings.version,
+        config_source=get_loaded_yaml_path(),
+        route_rules=len(ROUTE_RULES),
+    )
     try:
         yield
     finally:

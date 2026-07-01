@@ -1,0 +1,61 @@
+# Adaptive API Gateway — Route Configuration Example
+# ====================================================
+# Copy this file to gateway.yaml and customise it for your deployment:
+#
+#   cp gateway.yaml.example gateway.yaml
+#
+# The gateway reads this file on startup.  To apply changes at runtime
+# (without restarting), call:
+#
+#   curl -X POST http://localhost:8000/admin/reload-config \
+#     -H "Authorization: Bearer $ADMIN_TOKEN"
+#
+# If gateway.yaml is missing the gateway boots with safe built-in defaults.
+
+# ── Upstream services ───────────────────────────────────────────────────
+# Map short names to base URLs.  Clients access them via:
+#   GET /proxy/{name}/{path...}
+#
+# Example — proxy requests to your own backend and a public API:
+#
+#   upstreams:
+#     my-backend: https://api.mycompany.com
+#     weather: https://api.openweathermap.org/data/2.5
+#
+upstreams:
+  jsonplaceholder: https://jsonplaceholder.typicode.com
+
+# ── Route rules ─────────────────────────────────────────────────────────
+# Per-upstream caching and response-optimisation policy.
+# Any upstream not listed below uses the _default rule.
+#
+# Fields:
+#   cacheable        – cache GET responses in Redis? (default: true)
+#   cache_ttl        – freshness window in seconds (default: 60)
+#   optional_fields  – JSON keys to strip on DEGRADED / POOR connections
+#   upstream_timeout – per-request timeout in seconds (null = global default)
+#
+# Example — your backend returns users with heavy profile data:
+#
+#   rules:
+#     my-backend:
+#       cacheable: true
+#       cache_ttl: 120
+#       optional_fields:
+#         - profile_picture   # base64 image, very large
+#         - activity_log      # array of recent actions
+#         - metadata           # internal debug info
+#       upstream_timeout: 15
+#
+rules:
+  _default:
+    cacheable: true
+    cache_ttl: 60
+    optional_fields: []
+
+  jsonplaceholder:
+    cacheable: true
+    cache_ttl: 300
+    optional_fields:
+      - body
+      - completed

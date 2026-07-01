@@ -10,17 +10,24 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import require_admin
-from auth.security import generate_api_key
+from auth.security import generate_api_key, hash_password
 from cache.redis_client import get_redis
 from cache.redis_client import ping as redis_ping
-from config import ROUTE_RULES, settings
-from models.db import APIKey, RequestLog, get_db
-from models.schemas import APIKeyCreate, APIKeyCreated, APIKeyOut, QueueStatus
+from config import ROUTE_RULES, get_loaded_yaml_path, reload_route_rules, settings
+from models.db import APIKey, RequestLog, User, get_db
+from models.schemas import (
+    APIKeyCreate,
+    APIKeyCreated,
+    APIKeyOut,
+    QueueStatus,
+    RegisterRequest,
+    UserOut,
+)
 from offline_queue.sync_worker import queue_depth, queue_pending
 
 log = structlog.get_logger()
@@ -58,6 +65,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)) -> dict:
 async def get_config() -> dict:
     return {
         "environment": settings.environment,
+        "config_source": get_loaded_yaml_path(),
         "rtt_thresholds_ms": {
             "good": settings.rtt_good_threshold_ms,
             "degraded": settings.rtt_degraded_threshold_ms,
@@ -69,6 +77,22 @@ async def get_config() -> dict:
         },
         "upstream_services": settings.upstream_services,
         "route_rules": {k: v.model_dump() for k, v in ROUTE_RULES.items()},
+    }
+
+
+@router.post("/reload-config")
+async def reload_config() -> dict:
+    """Re-read gateway.yaml and apply new route rules without restart."""
+    path, rules = reload_route_rules()
+    log.info(
+        "admin.config_reloaded",
+        source=str(path) if path else "(built-in defaults)",
+        rules=len(rules),
+    )
+    return {
+        "reloaded": True,
+        "config_source": str(path) if path else "(built-in defaults)",
+        "route_rules": {k: v.model_dump() for k, v in rules.items()},
     }
 
 
@@ -129,6 +153,29 @@ async def flush_cache(prefix: str | None = Query(default="cache:")) -> dict:
         deleted += 1
     log.info("admin.cache_flushed", pattern=pattern, deleted=deleted)
     return {"deleted": deleted, "pattern": pattern}
+
+
+@router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+async def create_admin_user(
+    payload: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Create a new admin user."""
+    existing = await db.execute(select(User).where(User.email == payload.email))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="email already registered"
+        )
+    user = User(
+        email=payload.email,
+        hashed_password=hash_password(payload.password),
+        is_admin=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    log.info("admin.user_created", user_id=str(user.id), is_admin=True)
+    return user
 
 
 def _is_uuid(value: str) -> bool:

@@ -11,6 +11,7 @@ services:
       - "8000:8000"
     volumes:
       - ./gateway:/app
+      - ./gateway.yaml:/app/gateway.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -27,6 +28,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    networks:
+      - gateway-net
 
   # Non-adaptive plain reverse proxy — the experiment baseline (AGW-BENCH).
   # Same /proxy/{service}/{path} interface as the gateway, zero adaptation, so

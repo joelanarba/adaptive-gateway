@@ -23,6 +23,7 @@ python-multipart==0.0.9
 
 # Config
 pydantic-settings==2.2.1
+PyYAML==6.0.1
 
 # Observability
 prometheus-client==0.20.0

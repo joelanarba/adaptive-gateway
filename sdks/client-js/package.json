@@ -1,0 +1,11 @@
+{
+  "name": "@adaptive-gateway/client",
+  "version": "1.0.0",
+  "description": "Frontend fetch wrapper to automatically inject network telemetry for the Adaptive Gateway.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Joel",
+  "license": "MIT"
+}

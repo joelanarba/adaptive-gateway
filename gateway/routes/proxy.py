@@ -170,11 +170,15 @@ async def _refresh_cache(
 async def proxy(service: str, path: str, request: Request) -> Response:
     base = settings.upstream_services.get(service)
     if base is None:
-        return Response(
-            content=f'{{"detail":"unknown upstream service: {service}"}}',
-            status_code=404,
-            media_type="application/json",
-        )
+        if settings.allow_unlisted_upstreams:
+            # Auto-discovery: assume the service resolves via Docker DNS on HTTP.
+            base = f"http://{service}"
+        else:
+            return Response(
+                content=f'{{"detail":"unknown upstream service: {service}"}}',
+                status_code=404,
+                media_type="application/json",
+            )
 
     rule = get_route_rule(service)
     request.state.optimizable = True

@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     # --- Proxy ---
     upstream_timeout_seconds: float = 10.0
     upstream_services: dict[str, str] = Field(default_factory=dict)
+    allow_unlisted_upstreams: bool = True
 
     # --- Rate limiting ---
     login_rate_limit: int = 5

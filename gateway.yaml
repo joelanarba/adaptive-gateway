@@ -1,0 +1,38 @@
+# Adaptive API Gateway — Route Configuration
+# ============================================
+# This file defines your upstream services and how the gateway optimises
+# responses for each one when the client is on a slow connection.
+#
+# After editing, either restart the gateway or call POST /admin/reload-config
+# (admin JWT required) to apply changes without downtime.
+
+# ── Upstream services ───────────────────────────────────────────────────
+# Map a short name to a base URL.  Clients reach them via
+#   /proxy/{name}/{path...}
+#
+# Values here are merged with the UPSTREAM_SERVICES env-var / .env entry.
+# If the same name appears in both, the YAML value wins.
+upstreams:
+  jsonplaceholder: https://jsonplaceholder.typicode.com
+
+# ── Route rules ─────────────────────────────────────────────────────────
+# Per-upstream caching and response-optimisation policy.
+# Any upstream not listed here uses the _default rule.
+#
+# Fields:
+#   cacheable        – whether to cache GET responses (default: true)
+#   cache_ttl        – freshness window in seconds (default: 60)
+#   optional_fields  – JSON keys stripped on DEGRADED / POOR connections
+#   upstream_timeout – per-request timeout in seconds (null = use global)
+rules:
+  _default:
+    cacheable: true
+    cache_ttl: 60
+    optional_fields: []
+
+  jsonplaceholder:
+    cacheable: true
+    cache_ttl: 300
+    optional_fields:
+      - body        # large text content, not needed for list views
+      - completed   # secondary boolean, useful only in detail views

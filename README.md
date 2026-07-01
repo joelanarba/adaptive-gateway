@@ -140,7 +140,13 @@ uvicorn main:app --reload --port 8000
 On startup (when `ENVIRONMENT` is not production) the app creates the DB tables
 automatically via `init_models()`; production uses Alembic migrations instead.
 
-### Option B — full stack in Docker
+### Option B — Deploy to AWS (One-Click)
+
+The fastest way to deploy the Adaptive Gateway to your AWS account is via our CloudFormation template. This will automatically provision a `t3.micro` EC2 instance, install Docker, and launch the entire stack (Gateway, Postgres, Redis, Dashboard, Grafana).
+
+[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=https%3A%2F%2Fraw.githubusercontent.com%2Fjoelanarba%2Fadaptive-gateway%2Fmain%2Faws-cloudformation.yml&stackName=AdaptiveGateway)
+
+### Option C — full stack in local Docker
 
 ```bash
 docker compose up --build
@@ -241,12 +247,119 @@ variables:
 | `UPSTREAM_SERVICES`         | `{"jsonplaceholder":"https://jsonplaceholder.typicode.com"}`  | JSON map of `service → base URL`. |
 | `ALLOWED_ORIGINS`           | `["http://localhost:3000","http://localhost:8000"]`           | CORS origins (JSON array). |
 | `RATE_LIMIT_ENABLED`        | `false`                                                       | Toggle the coarse global limiter. |
+| `ALLOW_UNLISTED_UPSTREAMS`  | `true`                                                        | Automatically proxy to `{service}` hostname via Docker DNS if missing from `gateway.yaml`. |
 | `GRAFANA_PASSWORD`          | `admin`                                                       | Grafana admin password. |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` / `S3_BUCKET_NAME` | *(empty)* | Research-data export to S3. |
 
-Per-route caching and field-stripping policy (`cache_ttl`, `optional_fields`,
-`upstream_timeout`) lives in `ROUTE_RULES` in `gateway/config.py`, keyed by the
-upstream service name — never hardcoded in middleware.
+Per-route caching and field-stripping policy is configured in `gateway.yaml`
+(see the next section).
+
+---
+
+## Auto-Discovery (Wildcard Upstreams)
+
+If `ALLOW_UNLISTED_UPSTREAMS=true` (the default), the gateway acts as a dynamic reverse proxy for your internal Docker network. 
+
+When you make a request to `/proxy/my-new-api:8080/path`, the gateway will automatically attempt to proxy traffic to `http://my-new-api:8080/path` using internal Docker DNS, even if `my-new-api` is not explicitly defined in `gateway.yaml`. This allows you to deploy new microservices in your `docker-compose.yml` and instantly securely expose them via the gateway with zero configuration.
+
+---
+
+## Drop-in SDKs and Middleware
+
+To make the Adaptive Gateway entirely "plug and play", we provide drop-in SDKs to integrate directly into your frontend or backend.
+
+### Frontend Javascript Client
+
+The `@adaptive-gateway/client` provides a smart `fetch` wrapper that seamlessly measures RTT and injects network headers into your API calls.
+
+```javascript
+const { createAdaptiveFetch } = require('@adaptive-gateway/client');
+
+// Patches fetch to auto-ping the gateway and inject X-Client-RTT and ECT headers
+const adaptiveFetch = createAdaptiveFetch({ gatewayUrl: 'http://localhost:8000' });
+
+adaptiveFetch('http://localhost:8000/proxy/my-service/data')
+  .then(res => res.json())
+  .then(console.log);
+```
+
+### Express Middleware
+
+Don't want to run the python reverse proxy? You can add the payload stripping and connection detection logic directly into your Express backend using `@adaptive-gateway/express`.
+
+```javascript
+const express = require('express');
+const adaptiveGateway = require('@adaptive-gateway/express');
+
+const app = express();
+
+app.use(adaptiveGateway({
+  rttDegradedThresholdMs: 500,
+  stripFields: ['heavyImage', 'meta.largeData']
+}));
+
+app.get('/data', (req, res) => {
+  // If the client's connection is degraded, 'heavyImage' will automatically be stripped from this JSON!
+  res.json({
+    id: 1,
+    heavyImage: "base64...",
+    title: "Hello World"
+  });
+});
+```
+
+---
+
+## Route configuration (`gateway.yaml`)
+
+The gateway reads a `gateway.yaml` file on startup to configure upstream
+services and per-route optimisation policy. Copy the example and customise:
+
+```bash
+cp gateway.yaml.example gateway.yaml
+```
+
+### Example
+
+```yaml
+upstreams:
+  my-backend: https://api.mycompany.com
+
+rules:
+  _default:
+    cacheable: true
+    cache_ttl: 60
+    optional_fields: []
+
+  my-backend:
+    cacheable: true
+    cache_ttl: 120
+    optional_fields:
+      - profile_picture   # large base64 blob
+      - activity_log      # verbose array
+    upstream_timeout: 15
+```
+
+**Fields per rule:**
+
+| Field             | Type        | Default | Description |
+|-------------------|-------------|---------|-------------|
+| `cacheable`       | `bool`      | `true`  | Cache GET responses in Redis. |
+| `cache_ttl`       | `int`       | `60`    | Freshness window in seconds. |
+| `optional_fields` | `list[str]` | `[]`    | JSON keys stripped on DEGRADED / POOR connections. |
+| `upstream_timeout`| `float`     | *global*| Per-request upstream timeout (seconds). |
+
+Any upstream not listed under `rules` uses the `_default` entry.
+
+### Hot reload
+
+You can apply changes to `gateway.yaml` **without restarting** the gateway:
+
+```bash
+curl -X POST http://localhost:8000/admin/reload-config \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+If `gateway.yaml` is missing, the gateway boots with safe built-in defaults.
 
 ---
 
@@ -372,6 +485,8 @@ python benchmarks/test_run_trials.py
 adaptive-gateway/
 ├── ARCHITECTURE.md                 ← project architecture
 ├── README.md                       ← you are here
+├── gateway.yaml                    ← route rules + upstream config (edit this!)
+├── gateway.yaml.example            ← commented example — copy to gateway.yaml
 ├── docker-compose.yml              ← local dev (all services)
 ├── .env.example                    ← copy to .env
 ├── pyproject.toml                  ← black / ruff / pytest config (pythonpath=gateway)
@@ -379,7 +494,7 @@ adaptive-gateway/
 ├── gateway/                        ← FastAPI app == import root
 │   ├── Dockerfile
 │   ├── main.py                     ← app + middleware registration, /health
-│   ├── config.py                   ← settings + per-route ROUTE_RULES
+│   ├── config.py                   ← settings + YAML route-rule loader
 │   ├── alembic.ini
 │   ├── middleware/
 │   │   ├── network_detector.py     ← tier classification (RTT / ECT / Save-Data / EWMA)
