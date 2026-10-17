@@ -15,34 +15,35 @@ from __future__ import annotations
 
 import structlog
 from fastapi import HTTPException, status
+from redis.exceptions import RedisError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from cache.redis_client import get_redis
 from config import settings
+from utils.client_identity import client_ip
 
 log = structlog.get_logger()
 
 _SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/redoc", "/openapi.json")
 
 
-def client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
 async def check_rate_limit(key: str, limit: int, window: int) -> tuple[bool, int]:
     """Fixed-window counter. Returns ``(allowed, remaining)``. Fails open."""
     redis = get_redis()
     try:
-        count = await redis.incr(key)
-        if count == 1:
-            await redis.expire(key, window)
-    except Exception as exc:  # noqa: BLE001 - intentional fail-open
-        log.warning("rate_limit.redis_error", error=str(exc))
+        count = await redis.eval(
+            "local n = redis.call('incr', KEYS[1]); "
+            "if n == 1 then redis.call('expire', KEYS[1], ARGV[1]) end; return n",
+            1,
+            key,
+            window,
+        )
+    except RedisError:
+        log.warning("rate_limit.redis_error")
+        if settings.is_production:
+            raise HTTPException(503, "rate limiter unavailable") from None
         return True, limit
     return count <= limit, max(limit - count, 0)
 
@@ -67,9 +68,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         key = f"ratelimit:global:{client_ip(request)}"
-        allowed, remaining = await check_rate_limit(
-            key, settings.global_rate_limit, settings.global_rate_window_seconds
-        )
+        try:
+            allowed, remaining = await check_rate_limit(
+                key, settings.global_rate_limit, settings.global_rate_window_seconds
+            )
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         if not allowed:
             return JSONResponse(
                 {"detail": "rate limit exceeded"},

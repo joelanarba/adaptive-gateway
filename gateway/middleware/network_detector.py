@@ -33,10 +33,13 @@ Thresholds (configurable in settings), as half-open intervals:
 from __future__ import annotations
 
 import json
+import math
 import time
+from dataclasses import asdict
 from enum import Enum
 
 import structlog
+from redis.exceptions import RedisError, WatchError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -44,7 +47,9 @@ from starlette.responses import Response
 from cache.redis_client import get_redis
 from config import settings
 from middleware.rtt_state import RttState, Thresholds, advance
+from utils.client_identity import client_ip
 from utils.metrics import network_quality_counter, record_request
+from utils.request_logger import enqueue_log
 
 log = structlog.get_logger()
 
@@ -84,6 +89,8 @@ def _thresholds() -> Thresholds:
 def classify_rtt(rtt_ms: float) -> NetworkQuality:
     """Classify a link RTT (ms) into a tier using half-open intervals:
     GOOD [0, 150) · DEGRADED [150, 500) · POOR [500, ∞)."""
+    if not math.isfinite(rtt_ms) or rtt_ms < 0:
+        raise ValueError("RTT must be finite and nonnegative")
     if rtt_ms < settings.rtt_good_threshold_ms:
         return NetworkQuality.GOOD
     if rtt_ms < settings.rtt_degraded_threshold_ms:
@@ -92,17 +99,15 @@ def classify_rtt(rtt_ms: float) -> NetworkQuality:
 
 
 def _client_id(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return client_ip(request)
 
 
 def _parse_float(value: str | None) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) and parsed >= 0 else None
     except ValueError:
         return None
 
@@ -113,26 +118,36 @@ def _explicit_signal(request: Request) -> tuple[NetworkQuality, float | None] | 
     if client_rtt is not None:
         return classify_rtt(client_rtt), client_rtt
 
-    ect = request.headers.get("ect")
+    ect = (request.headers.get("ect") or "").strip()
     if ect and ect.lower() in ECT_MAP:
         return ECT_MAP[ect.lower()], None
 
-    if (request.headers.get("save-data") or "").lower() == "on":
+    if (request.headers.get("save-data") or "").strip().lower() == "on":
         return NetworkQuality.DEGRADED, None
 
     return None
 
 
-async def _load_state(client_id: str) -> RttState:
-    """Load a client's passive classification state from Redis (default if none)."""
-    raw = await get_redis().get(_STATE_KEY.format(client_id))
+def _decode_state(raw: str | None) -> RttState:
+    """Reject corrupt Redis state without failing client traffic."""
     if raw:
         try:
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                return RttState()
+            tier = data.get("tier", NetworkQuality.GOOD.value)
+            pending = data.get("pending_tier")
+            ewma = data.get("ewma")
+            if tier not in {"GOOD", "DEGRADED", "POOR"}:
+                return RttState()
+            if pending not in {None, "GOOD", "DEGRADED", "POOR"}:
+                return RttState()
+            if ewma is not None and _parse_float(str(ewma)) is None:
+                return RttState()
             return RttState(
-                ewma=data.get("ewma"),
-                tier=data.get("tier", NetworkQuality.GOOD.value),
-                pending_tier=data.get("pending_tier"),
+                ewma=float(ewma) if ewma is not None else None,
+                tier=tier,
+                pending_tier=pending,
                 pending_count=int(data.get("pending_count", 0)),
             )
         except (ValueError, TypeError):
@@ -140,18 +155,32 @@ async def _load_state(client_id: str) -> RttState:
     return RttState(tier=NetworkQuality.GOOD.value)
 
 
-async def _store_state(client_id: str, state: RttState) -> None:
-    payload = json.dumps(
-        {
-            "ewma": state.ewma,
-            "tier": state.tier,
-            "pending_tier": state.pending_tier,
-            "pending_count": state.pending_count,
-        }
-    )
-    await get_redis().set(
-        _STATE_KEY.format(client_id), payload, ex=settings.rtt_state_ttl_seconds
-    )
+async def _load_state(client_id: str) -> RttState:
+    try:
+        return _decode_state(await get_redis().get(_STATE_KEY.format(client_id)))
+    except RedisError:
+        return RttState()
+
+
+async def _update_state(client_id: str, sample_ms: float) -> None:
+    """Advance shared state atomically with bounded contention retries."""
+    key = _STATE_KEY.format(client_id)
+    for _ in range(4):
+        try:
+            async with get_redis().pipeline(transaction=True) as pipeline:
+                await pipeline.watch(key)
+                current = _decode_state(await pipeline.get(key))
+                updated = advance(current, sample_ms, _thresholds())
+                pipeline.multi()
+                pipeline.set(
+                    key, json.dumps(asdict(updated)), ex=settings.rtt_state_ttl_seconds
+                )
+                await pipeline.execute()
+                return
+        except WatchError:
+            continue
+        except RedisError:
+            return
 
 
 class NetworkDetectorMiddleware(BaseHTTPMiddleware):
@@ -181,7 +210,7 @@ class NetworkDetectorMiddleware(BaseHTTPMiddleware):
 
         elapsed_ms = (time.monotonic() - start) * 1000.0
         upstream_ms = getattr(request.state, "upstream_latency_ms", None) or 0.0
-        # Isolate the client-link component from the upstream component.
+        # Server processing residual only; this does not measure client-link RTT.
         link_rtt_ms = (
             explicit_rtt
             if explicit_rtt is not None
@@ -192,23 +221,35 @@ class NetworkDetectorMiddleware(BaseHTTPMiddleware):
         # explicit hint means the client told us, so there is nothing to learn and
         # the hot path stays Redis-free).
         if state is not None:
-            await _store_state(client_id, advance(state, link_rtt_ms, _thresholds()))
+            await _update_state(client_id, link_rtt_ms)
 
         quality_value = quality.value
         response.headers["X-Network-Quality"] = quality_value
         response.headers["X-RTT-Ms"] = f"{link_rtt_ms:.1f}"
+        response.headers["X-RTT-Source"] = (
+            "client-hint" if explicit_rtt is not None else "server-processing-estimate"
+        )
         request.state.rtt_ms = link_rtt_ms
+        record = getattr(request.state, "request_log_record", None)
+        if record is not None:
+            record["rtt_ms"] = elapsed_ms  # Legacy column: server time, NOT link RTT.
+            record["upstream_latency_ms"] = upstream_ms
+            record["response_size_optimized"] = getattr(
+                request.state,
+                "response_size_optimized",
+                record["response_size_original"],
+            )
+            enqueue_log(record)
 
         # Record the research counters. Use the matched route template (not the
         # raw path) to keep label cardinality bounded.
         route = request.scope.get("route")
-        route_label = getattr(route, "path", request.url.path)
+        route_label = getattr(route, "path", "unmatched")
         cache_hit = bool(getattr(request.state, "served_from_cache", False))
         network_quality_counter.labels(quality=quality_value).inc()
         record_request(request.method, route_label, quality_value, cache_hit)
         log.debug(
             "request.complete",
-            path=request.url.path,
             method=request.method,
             network_quality=quality_value,
             link_rtt_ms=round(link_rtt_ms, 1),

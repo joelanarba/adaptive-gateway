@@ -1,0 +1,43 @@
+# Isolated project: docker compose -p agw-experiment -f docker-compose.experiment.yml up --build
+# Both systems run the same gateway image/config; only ADAPTATION_ENABLED differs.
+services:
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: experiment
+      POSTGRES_PASSWORD: disposable-experiment-only
+      POSTGRES_DB: experiment
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U experiment"]
+      interval: 2s
+      retries: 20
+  fixture:
+    build:
+      context: .
+      dockerfile: benchmarks/fixture/Dockerfile
+  adaptive: &gateway
+    build: ./gateway
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --no-proxy-headers
+    environment: &environment
+      ENVIRONMENT: development
+      SECRET_KEY: disposable-experiment-signing-key-local-only
+      DATABASE_URL: postgresql+asyncpg://experiment:disposable-experiment-only@postgres:5432/experiment
+      REDIS_URL: redis://redis:6379
+      UPSTREAM_SERVICES: '{}'
+      ALLOW_UNLISTED_UPSTREAMS: 'false'
+      RATE_LIMIT_ENABLED: 'false'
+    ports: ['127.0.0.1:8001:8000']
+    volumes: ['./benchmarks/gateway.yaml:/app/gateway.yaml:ro']
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+      fixture: {condition: service_started}
+  control:
+    <<: *gateway
+    ports: ['127.0.0.1:8002:8000']
+    environment:
+      <<: *environment
+      ADAPTATION_ENABLED: 'false'

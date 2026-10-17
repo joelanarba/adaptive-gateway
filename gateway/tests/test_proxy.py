@@ -7,7 +7,7 @@ import asyncio
 import httpx
 import pytest
 
-from cache.redis_client import CachedResponse, build_cache_key, cache_set
+from cache.redis_client import CachedResponse, cache_set, get_redis
 
 GOOD = {"X-Client-RTT": "10"}
 
@@ -44,7 +44,11 @@ async def test_post_is_passed_through_not_cached(mock_upstream, client):
         return httpx.Response(201, json={"created": True})
 
     mock_upstream["handler"] = handler
-    r = await client.post("/proxy/mock/items", json={"name": "x"}, headers=GOOD)
+    r = await client.post(
+        "/proxy/mock/items",
+        json={"name": "x"},
+        headers={**GOOD, "Idempotency-Key": "test-write-1"},
+    )
     assert r.status_code == 201
     assert r.headers["X-Cache-Status"] == "PASS"
 
@@ -55,7 +59,11 @@ async def test_write_timeout_is_queued(mock_upstream, client):
         raise httpx.TimeoutException("simulated upstream timeout")
 
     mock_upstream["handler"] = handler
-    r = await client.post("/proxy/mock/items", json={"name": "x"}, headers=GOOD)
+    r = await client.post(
+        "/proxy/mock/items",
+        json={"name": "x"},
+        headers={**GOOD, "Idempotency-Key": "test-write-1"},
+    )
     assert r.status_code == 202
     assert r.headers["X-Cache-Status"] == "QUEUED"
     assert r.headers.get("X-Queue-Id")
@@ -105,10 +113,10 @@ async def test_stale_revalidation_is_single_flight(mock_upstream, client):
             headers={"content-type": "application/json"},
         )
 
+    # Populate the real key (it includes target and forwarded representation headers).
+    await client.get("/proxy/mock/posts", headers=GOOD)
+    key = (await get_redis().keys("cache:*"))[0]
     mock_upstream["handler"] = handler
-
-    # Seed an immediately-stale entry for the route.
-    key = build_cache_key("GET", "/proxy/mock/posts", "")
     await cache_set(
         key,
         CachedResponse.build(

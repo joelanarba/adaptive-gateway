@@ -7,8 +7,8 @@ base URL in ``settings.upstream_services``.
 Behavior:
 - GET: stale-while-revalidate cache. Serve cache first; refresh stale entries in
   the background; only GETs are cached, never auth endpoints.
-- Writes (POST/PUT/DELETE/PATCH): forwarded; on upstream *timeout* the write is
-  enqueued to the offline queue and the client gets 202 instead of an error.
+- Writes are forwarded. Only routes asserting an upstream idempotency contract may
+  enqueue timed-out writes carrying a valid key; 202 means accepted, not committed.
 - On upstream failure for a GET, fall back to any cached (even stale) copy.
 - Adds X-Forwarded-For, X-Network-Quality, X-Cache-Status; marks the response
   ``optimizable`` and hands the route's ``optional_fields`` to the optimizer.
@@ -18,11 +18,14 @@ Behavior:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
+from redis.exceptions import RedisError
+from starlette.responses import JSONResponse
 
 from cache.redis_client import (
     CachedResponse,
@@ -36,8 +39,15 @@ from cache.redis_client import (
 from config import get_route_rule, settings
 from middleware.network_detector import NetworkQuality
 from offline_queue.sync_worker import enqueue_write
+from utils.client_identity import client_ip
 from utils.metrics import gateway_upstream_latency_seconds, record_cache_event
-from utils.request_logger import enqueue_log
+from utils.proxy_http import (
+    BodyTooLarge,
+    bounded_request,
+    build_target,
+    clean_headers,
+    discover_upstream,
+)
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -58,19 +68,22 @@ HOP_BY_HOP = {
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return client_ip(request)
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
+    headers = clean_headers(request.headers)
     quality = getattr(request.state, "network_quality", NetworkQuality.GOOD)
-    xff = request.headers.get("x-forwarded-for")
-    headers["X-Forwarded-For"] = (
-        f"{xff}, {_client_ip(request)}" if xff else _client_ip(request)
-    )
+    for name in (
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "forwarded",
+        "x-network-quality",
+    ):
+        headers.pop(name, None)
+    headers["X-Forwarded-For"] = _client_ip(request)
+    headers["accept-encoding"] = "identity"
     headers["X-Network-Quality"] = (
         quality.value if isinstance(quality, NetworkQuality) else str(quality)
     )
@@ -78,11 +91,59 @@ def _forward_headers(request: Request) -> dict[str, str]:
 
 
 def _response_headers(upstream: httpx.Response) -> dict[str, str]:
-    return {
-        k: v
-        for k, v in upstream.headers.items()
-        if k.lower() not in HOP_BY_HOP and k.lower() != "content-encoding"
-    }
+    return clean_headers(upstream.headers)
+
+
+def _cache_allowed(request: Request) -> bool:
+    """Only anonymous unconditional reads can use the shared response cache."""
+    return not any(
+        name in request.headers
+        for name in (
+            "authorization",
+            "x-api-key",
+            "cookie",
+            "range",
+            "if-range",
+            "if-match",
+            "if-none-match",
+            "if-modified-since",
+            "if-unmodified-since",
+        )
+    ) and not any(
+        value in request.headers.get("cache-control", "").lower()
+        for value in ("no-cache", "no-store", "max-age=0")
+    )
+
+
+def _response_cacheable(response: httpx.Response) -> bool:
+    # Do not guess HTTP freshness overrides or arbitrary Vary semantics. The
+    # route TTL is used only for responses without upstream cache directives.
+    return (
+        response.status_code == 200
+        and "set-cookie" not in response.headers
+        and "cache-control" not in response.headers
+        and "vary" not in response.headers
+        and "expires" not in response.headers
+    )
+
+
+def _cache_key(request: Request, target: str, headers: dict) -> str:
+    variant = json.dumps(sorted((k.lower(), v) for k, v in headers.items()))
+    return build_cache_key("GET", target, variant=variant)
+
+
+def _from_upstream(resp: httpx.Response, cache_status: str) -> Response:
+    headers = _response_headers(resp)
+    headers.pop("set-cookie", None)
+    headers["X-Cache-Status"] = cache_status
+    response = Response(
+        content=resp.content, status_code=resp.status_code, headers=headers
+    )
+    for cookie in resp.extensions.get(
+        "set_cookie", resp.headers.get_list("set-cookie")
+    ):
+        response.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+    return response
 
 
 def _http(request: Request) -> httpx.AsyncClient:
@@ -101,9 +162,13 @@ async def _call_upstream(
 ) -> httpx.Response:
     started = time.monotonic()
     try:
-        return await client.request(
-            method, url, headers=headers, content=body, timeout=timeout
-        )
+        try:
+            async with asyncio.timeout(timeout):
+                return await bounded_request(
+                    client, method, url, headers=headers, content=body, timeout=timeout
+                )
+        except TimeoutError:
+            raise httpx.ReadTimeout("upstream deadline exceeded") from None
     finally:
         elapsed = time.monotonic() - started
         gateway_upstream_latency_seconds.labels(upstream=service).observe(elapsed)
@@ -128,6 +193,13 @@ def _spawn(coro) -> asyncio.Task:
     return task
 
 
+async def stop_background_tasks() -> None:
+    tasks = list(_background_tasks)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _refresh_cache(
     client: httpx.AsyncClient,
     key: str,
@@ -135,6 +207,8 @@ async def _refresh_cache(
     headers: dict[str, str],
     service: str,
     fresh_for: int,
+    lock_token: str,
+    timeout: float,
 ) -> None:
     """Background revalidation for a stale cache entry.
 
@@ -142,10 +216,8 @@ async def _refresh_cache(
     releases it when done (the lock's TTL is the crash safety net).
     """
     try:
-        resp = await _call_upstream(
-            client, "GET", url, headers, b"", service, settings.upstream_timeout_seconds
-        )
-        if resp.status_code < 400:
+        resp = await _call_upstream(client, "GET", url, headers, b"", service, timeout)
+        if _response_cacheable(resp):
             await cache_set(
                 key,
                 CachedResponse.build(
@@ -157,10 +229,10 @@ async def _refresh_cache(
                 ),
             )
             log.debug("cache.revalidated", key=key)
-    except httpx.HTTPError as exc:
-        log.warning("cache.revalidate_failed", key=key, error=str(exc))
+    except (httpx.HTTPError, BodyTooLarge):
+        log.warning("cache.revalidate_failed", service=service)
     finally:
-        await release_lock(f"revalidate:{key}")
+        await release_lock(f"revalidate:{key}", lock_token)
 
 
 @router.api_route(
@@ -169,35 +241,44 @@ async def _refresh_cache(
 )
 async def proxy(service: str, path: str, request: Request) -> Response:
     base = settings.upstream_services.get(service)
+    discovery_host = None
     if base is None:
-        if settings.allow_unlisted_upstreams:
-            # Auto-discovery: assume the service resolves via Docker DNS on HTTP.
-            base = f"http://{service}"
-        else:
-            return Response(
-                content=f'{{"detail":"unknown upstream service: {service}"}}',
-                status_code=404,
-                media_type="application/json",
-            )
+        try:
+            base, discovery_host = await discover_upstream(service)
+        except (ValueError, OSError, TimeoutError):
+            return JSONResponse({"detail": "unknown upstream service"}, status_code=404)
 
     rule = get_route_rule(service)
-    request.state.optimizable = True
+    request.state.optimizable = (
+        request.method == "GET" and "range" not in request.headers
+    )
     request.state.optional_fields = rule.optional_fields
     request.state.served_from_cache = False
 
-    query = request.url.query
-    target = f"{base.rstrip('/')}/{path}"
-    if query:
-        target = f"{target}?{query}"
+    try:
+        target = build_target(base, path, request.url.query)
+    except ValueError:
+        return JSONResponse({"detail": "invalid upstream path"}, status_code=400)
 
     timeout = rule.upstream_timeout or settings.upstream_timeout_seconds
-    body = await request.body()
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > settings.max_request_body_bytes:
+            return JSONResponse({"detail": "request body too large"}, status_code=413)
+        chunks.append(chunk)
+    body = b"".join(chunks)
     fwd_headers = _forward_headers(request)
+    if discovery_host:
+        fwd_headers["host"] = discovery_host
     method = request.method
 
     if method == "GET":
         return await _handle_get(request, service, path, target, rule, fwd_headers)
-    return await _handle_write(request, service, target, fwd_headers, body, timeout)
+    return await _handle_write(
+        request, service, target, fwd_headers, body, timeout, rule.queue_writes
+    )
 
 
 async def _handle_get(
@@ -208,11 +289,12 @@ async def _handle_get(
     rule,
     fwd_headers: dict[str, str],
 ) -> Response:
-    cache_key = build_cache_key("GET", request.url.path, request.url.query)
+    cache_key = _cache_key(request, target, fwd_headers)
+    cacheable = rule.cacheable and _cache_allowed(request)
     client = _http(request)
 
     status_, entry = (
-        await cache_get(cache_key) if rule.cacheable else (CacheStatus.MISS, None)
+        await cache_get(cache_key) if cacheable else (CacheStatus.MISS, None)
     )
 
     if status_ == CacheStatus.HIT and entry is not None:
@@ -227,12 +309,22 @@ async def _handle_get(
         # Serve stale now; revalidate in the background. Single-flight: only the
         # lock winner refreshes — concurrent callers on a hot key just serve
         # stale instead of each spawning a duplicate upstream call (stampede).
-        if await acquire_lock(
-            f"revalidate:{cache_key}", settings.revalidate_lock_ttl_seconds
-        ):
+        timeout = rule.upstream_timeout or settings.upstream_timeout_seconds
+        lock_token = await acquire_lock(
+            f"revalidate:{cache_key}",
+            max(settings.revalidate_lock_ttl_seconds, int(timeout) + 5),
+        )
+        if lock_token:
             _spawn(
                 _refresh_cache(
-                    client, cache_key, target, fwd_headers, service, rule.cache_ttl
+                    client,
+                    cache_key,
+                    target,
+                    fwd_headers,
+                    service,
+                    rule.cache_ttl,
+                    lock_token,
+                    timeout,
                 )
             )
         _log_request(request, "STALE", entry.status, len(entry.body), service)
@@ -251,8 +343,8 @@ async def _handle_get(
             rule.upstream_timeout or settings.upstream_timeout_seconds,
             request=request,
         )
-    except httpx.HTTPError as exc:
-        log.warning("proxy.upstream_error", service=service, error=str(exc))
+    except (httpx.HTTPError, BodyTooLarge):
+        log.warning("proxy.upstream_error", service=service)
         _log_request(request, "MISS", 503, 0, service)
         return Response(
             content='{"detail":"upstream unavailable"}',
@@ -260,7 +352,7 @@ async def _handle_get(
             media_type="application/json",
         )
 
-    if rule.cacheable and resp.status_code < 400:
+    if cacheable and _response_cacheable(resp):
         await cache_set(
             cache_key,
             CachedResponse.build(
@@ -273,14 +365,7 @@ async def _handle_get(
         )
 
     _log_request(request, "MISS", resp.status_code, len(resp.content), service)
-    headers = _response_headers(resp)
-    headers["X-Cache-Status"] = "MISS"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        headers=headers,
-        media_type=resp.headers.get("content-type"),
-    )
+    return _from_upstream(resp, "MISS" if cacheable else "BYPASS")
 
 
 async def _handle_write(
@@ -290,6 +375,7 @@ async def _handle_write(
     fwd_headers: dict[str, str],
     body: bytes,
     timeout: float,
+    queue_writes: bool = False,
 ) -> Response:
     request.state.optimizable = False  # don't reshape write responses
     client = _http(request)
@@ -298,16 +384,34 @@ async def _handle_write(
             client, request.method, target, fwd_headers, body, service, timeout, request
         )
     except (httpx.TimeoutException, httpx.ConnectError) as exc:
-        # Durable: queue the write for replay rather than failing the client.
-        msg_id = await enqueue_write(
-            method=request.method,
-            url=target,
-            path=request.url.path,
-            headers=fwd_headers,
-            body=body,
-            client_id=getattr(request.state, "user_id", None) or _client_ip(request),
+        key = request.headers.get("idempotency-key", "")
+        eligible = (
+            queue_writes
+            and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and 1 <= len(key) <= 128
+            and key.isascii()
+            and key.isprintable()
         )
-        log.info("proxy.write_queued", service=service, msg_id=msg_id, error=str(exc))
+        if not eligible:
+            return JSONResponse(
+                {"detail": "upstream unavailable; write outcome unknown; not queued"},
+                status_code=504 if isinstance(exc, httpx.TimeoutException) else 502,
+            )
+        try:
+            msg_id = await enqueue_write(
+                method=request.method,
+                url=target,
+                path=request.url.path,
+                headers=fwd_headers,
+                body=body,
+                client_id=getattr(request.state, "user_id", None)
+                or _client_ip(request),
+            )
+        except (RedisError, ValueError):
+            return JSONResponse(
+                {"detail": "queue unavailable; write outcome unknown"}, status_code=503
+            )
+        log.info("proxy.write_queued", service=service, msg_id=msg_id)
         _log_request(request, "QUEUED", 202, 0, service)
         return Response(
             content='{"detail":"upstream unavailable; write queued for retry"}',
@@ -315,8 +419,8 @@ async def _handle_write(
             media_type="application/json",
             headers={"X-Queue-Id": str(msg_id), "X-Cache-Status": "QUEUED"},
         )
-    except httpx.HTTPError as exc:
-        log.warning("proxy.upstream_error", service=service, error=str(exc))
+    except (httpx.HTTPError, BodyTooLarge):
+        log.warning("proxy.upstream_error", service=service)
         _log_request(request, "ERROR", 502, 0, service)
         return Response(
             content='{"detail":"bad gateway"}',
@@ -325,14 +429,7 @@ async def _handle_write(
         )
 
     _log_request(request, "PASS", resp.status_code, len(resp.content), service)
-    headers = _response_headers(resp)
-    headers["X-Cache-Status"] = "PASS"
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        headers=headers,
-        media_type=resp.headers.get("content-type"),
-    )
+    return _from_upstream(resp, "PASS")
 
 
 def _from_cache(entry: CachedResponse, cache_status: str) -> Response:
@@ -362,17 +459,15 @@ def _log_request(
     quality = getattr(request.state, "network_quality", NetworkQuality.GOOD)
     start = getattr(request.state, "request_start", None)
     elapsed_ms = (time.monotonic() - start) * 1000.0 if start else 0.0
-    enqueue_log(
-        {
-            "method": request.method,
-            "path": request.url.path,
-            "network_quality": (
-                quality.value if isinstance(quality, NetworkQuality) else str(quality)
-            ),
-            "cache_status": cache_status,
-            "status_code": status_code,
-            "rtt_ms": elapsed_ms,
-            "response_size_original": size,
-            "client_id": getattr(request.state, "user_id", None) or _client_ip(request),
-        }
-    )
+    request.state.request_log_record = {
+        "method": request.method,
+        "path": request.url.path,
+        "network_quality": (
+            quality.value if isinstance(quality, NetworkQuality) else str(quality)
+        ),
+        "cache_status": cache_status,
+        "status_code": status_code,
+        "rtt_ms": elapsed_ms,
+        "response_size_original": size,
+        "client_id": getattr(request.state, "user_id", None) or _client_ip(request),
+    }

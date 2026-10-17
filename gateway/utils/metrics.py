@@ -1,12 +1,13 @@
 """
 Prometheus instrumentation.
 
-These collectors ARE the research data for the paper — every request must be
-recorded. Import the collectors directly, or use the small helper functions at
+Operational counters help inspect behavior; controlled client-side raw results
+are the experiment evidence. Counters alone do not establish research validity.
+Import the collectors directly, or use the small helper functions at
 the bottom which keep label usage consistent across the codebase.
 
 Registered against the default Prometheus registry, which ``main.py`` exposes
-via ``prometheus_client.make_asgi_app()`` mounted at ``/metrics``.
+via ``generate_latest()`` in the normal ``/metrics`` route.
 """
 
 from __future__ import annotations

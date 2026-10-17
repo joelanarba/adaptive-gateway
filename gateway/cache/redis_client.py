@@ -10,18 +10,20 @@ stale-while-revalidate:
   background refresh runs.
 - ``cache_get`` returns the envelope plus whether it is fresh, stale, or absent.
 
-Cache key format: ``cache:{method}:{path}:{sorted_query_hash}``.
+Cache keys hash the exact target/query order and representation inputs.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import secrets
 import time
 from enum import Enum
 
 import redis.asyncio as aioredis
 from pydantic import BaseModel
+from redis.exceptions import RedisError
 
 from config import settings
 
@@ -40,6 +42,8 @@ def get_redis() -> aioredis.Redis:
             encoding="utf-8",
             decode_responses=True,
             max_connections=50,
+            socket_connect_timeout=settings.redis_socket_timeout_seconds,
+            socket_timeout=settings.redis_socket_timeout_seconds,
         )
     return _redis
 
@@ -57,16 +61,14 @@ class CacheStatus(str, Enum):
     STALE = "STALE"
 
 
-def build_cache_key(method: str, path: str, query_string: str = "") -> str:
-    """Build a stable cache key. Query params are sorted before hashing so
-    that semantically-equal requests collide on the same key."""
-    if query_string:
-        pairs = sorted(query_string.split("&"))
-        normalized = "&".join(p for p in pairs if p)
-    else:
-        normalized = ""
-    query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return f"cache:{method.upper()}:{path}:{query_hash}"
+def build_cache_key(
+    method: str, path: str, query_string: str = "", *, variant: str = ""
+) -> str:
+    """Hash exact URL/query order and representation inputs without exposing data."""
+    digest = hashlib.sha256(
+        f"{method.upper()}\0{path}\0{query_string}\0{variant}".encode()
+    ).hexdigest()
+    return f"cache:v2:{digest}"
 
 
 class CachedResponse(BaseModel):
@@ -106,7 +108,7 @@ class CachedResponse(BaseModel):
 
     @property
     def is_stale(self) -> bool:
-        return self.age_seconds > self.fresh_for
+        return self.age_seconds >= self.fresh_for
 
 
 async def cache_get(key: str) -> tuple[CacheStatus, CachedResponse | None]:
@@ -115,11 +117,15 @@ async def cache_get(key: str) -> tuple[CacheStatus, CachedResponse | None]:
     Returns ``(HIT, entry)`` if fresh, ``(STALE, entry)`` if present but past
     freshness, or ``(MISS, None)`` if absent.
     """
-    raw = await get_redis().get(key)
+    try:
+        raw = await get_redis().get(key)
+    except RedisError:
+        return CacheStatus.MISS, None
     if raw is None:
         return CacheStatus.MISS, None
     try:
         entry = CachedResponse.model_validate_json(raw)
+        _ = entry.body
     except (ValueError, TypeError):
         return CacheStatus.MISS, None
     return (CacheStatus.STALE if entry.is_stale else CacheStatus.HIT), entry
@@ -128,7 +134,10 @@ async def cache_get(key: str) -> tuple[CacheStatus, CachedResponse | None]:
 async def cache_set(key: str, entry: CachedResponse) -> None:
     """Store a response envelope with a physical TTL covering the stale grace."""
     physical_ttl = entry.fresh_for + STALE_GRACE_SECONDS
-    await get_redis().set(key, entry.model_dump_json(), ex=physical_ttl)
+    try:
+        await get_redis().set(key, entry.model_dump_json(), ex=max(physical_ttl, 1))
+    except RedisError:
+        pass  # A cache outage must not fail a successful upstream response.
 
 
 async def cache_set_raw(key: str, value: str, ttl: int) -> None:
@@ -143,23 +152,37 @@ async def cache_delete(key: str) -> None:
     await get_redis().delete(key)
 
 
-async def acquire_lock(name: str, ttl_seconds: int) -> bool:
+async def acquire_lock(name: str, ttl_seconds: int) -> str | None:
     """Acquire a best-effort lock via ``SET NX EX``; return True iff acquired.
 
     Used for single-flight stale revalidation: only the caller that wins the lock
     refreshes the upstream, the rest serve stale. The TTL is the crash safety net
     so a holder that dies never blocks future refreshes forever.
     """
-    return bool(await get_redis().set(f"lock:{name}", "1", nx=True, ex=ttl_seconds))
+    token = secrets.token_hex(16)
+    try:
+        acquired = await get_redis().set(f"lock:{name}", token, nx=True, ex=ttl_seconds)
+        return token if acquired else None
+    except RedisError:
+        return None
 
 
-async def release_lock(name: str) -> None:
+async def release_lock(name: str, token: str) -> None:
     """Release a lock taken with :func:`acquire_lock`."""
-    await get_redis().delete(f"lock:{name}")
+    try:
+        await get_redis().eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) else return 0 end",
+            1,
+            f"lock:{name}",
+            token,
+        )
+    except RedisError:
+        pass
 
 
 async def ping() -> bool:
     try:
         return bool(await get_redis().ping())
-    except Exception:
+    except RedisError:
         return False

@@ -10,13 +10,11 @@ reload rules at runtime.
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 
 import pytest
 
 from config import (
     ROUTE_RULES,
-    RouteRule,
     _parse_rules,
     get_loaded_yaml_path,
     get_route_rule,
@@ -24,10 +22,10 @@ from config import (
     reload_route_rules,
 )
 
-
 # ---------------------------------------------------------------------------
 # _parse_rules
 # ---------------------------------------------------------------------------
+
 
 class TestParseRules:
     """Unit tests for the raw-dict → RouteRule parser."""
@@ -54,19 +52,19 @@ class TestParseRules:
 
     def test_non_dict_rule_skipped(self):
         """Non-mapping entries should be skipped with a warning, not crash."""
-        parsed = _parse_rules({"bad": "not-a-dict", "good": {"cache_ttl": 10}})
-        assert "bad" not in parsed
-        assert "good" in parsed
+        with pytest.raises(ValueError):
+            _parse_rules({"bad": "not-a-dict", "good": {"cache_ttl": 10}})
 
     def test_invalid_types_skipped(self):
         """Wrong field types should skip the entry, not crash."""
-        parsed = _parse_rules({"bad": {"cache_ttl": "not-an-int"}})
-        assert "bad" not in parsed
+        with pytest.raises(ValueError):
+            _parse_rules({"bad": {"cache_ttl": "not-an-int"}})
 
 
 # ---------------------------------------------------------------------------
 # load_route_rules — with a real YAML file
 # ---------------------------------------------------------------------------
+
 
 class TestLoadRouteRules:
     """Integration tests for loading from a gateway.yaml file."""
@@ -95,7 +93,10 @@ class TestLoadRouteRules:
         yaml_file.write_text(yaml_content, encoding="utf-8")
 
         # Patch _find_file to return our temp file.
-        monkeypatch.setattr("config._find_file", lambda name: yaml_file if name == "gateway.yaml" else None)
+        monkeypatch.setattr(
+            "config._find_file",
+            lambda name: yaml_file if name == "gateway.yaml" else None,
+        )
 
         path = load_route_rules()
 
@@ -121,24 +122,29 @@ class TestLoadRouteRules:
         """Broken YAML syntax should fall back to defaults, not crash."""
         bad_yaml = tmp_path / "gateway.yaml"
         bad_yaml.write_text("rules:\n  bad: [unmatched", encoding="utf-8")
-        monkeypatch.setattr("config._find_file", lambda name: bad_yaml if name == "gateway.yaml" else None)
+        monkeypatch.setattr(
+            "config._find_file",
+            lambda name: bad_yaml if name == "gateway.yaml" else None,
+        )
 
-        path = load_route_rules()
-
-        # Should fall back to defaults.
-        assert path is None
-        assert "_default" in ROUTE_RULES
+        before = dict(ROUTE_RULES)
+        with pytest.raises(ValueError):
+            load_route_rules()
+        assert ROUTE_RULES == before
 
     def test_yaml_without_rules_section(self, tmp_path, monkeypatch):
         """YAML with only upstreams and no rules → fall back to defaults."""
         yaml_content = "upstreams:\n  svc: https://example.com\n"
         yaml_file = tmp_path / "gateway.yaml"
         yaml_file.write_text(yaml_content, encoding="utf-8")
-        monkeypatch.setattr("config._find_file", lambda name: yaml_file if name == "gateway.yaml" else None)
+        monkeypatch.setattr(
+            "config._find_file",
+            lambda name: yaml_file if name == "gateway.yaml" else None,
+        )
 
         path = load_route_rules()
 
-        assert path is None
+        assert path == yaml_file
         assert "_default" in ROUTE_RULES
 
     def test_upstreams_merged(self, tmp_path, monkeypatch):
@@ -148,6 +154,7 @@ class TestLoadRouteRules:
         # Simulate an env-var upstream.
         original = dict(settings.upstream_services)
         settings.upstream_services = {"existing": "https://existing.com"}
+        monkeypatch.setattr("config._ENV_UPSTREAMS", dict(settings.upstream_services))
 
         yaml_content = textwrap.dedent("""\
             upstreams:
@@ -159,7 +166,10 @@ class TestLoadRouteRules:
         """)
         yaml_file = tmp_path / "gateway.yaml"
         yaml_file.write_text(yaml_content, encoding="utf-8")
-        monkeypatch.setattr("config._find_file", lambda name: yaml_file if name == "gateway.yaml" else None)
+        monkeypatch.setattr(
+            "config._find_file",
+            lambda name: yaml_file if name == "gateway.yaml" else None,
+        )
 
         load_route_rules()
 
@@ -175,6 +185,7 @@ class TestLoadRouteRules:
 # reload_route_rules
 # ---------------------------------------------------------------------------
 
+
 class TestReloadRouteRules:
     """Tests for the hot-reload function."""
 
@@ -183,13 +194,16 @@ class TestReloadRouteRules:
             rules:
               _default:
                 cache_ttl: 99
-              hot: 
+              hot:
                 cache_ttl: 42
                 optional_fields: ["x"]
         """)
         yaml_file = tmp_path / "gateway.yaml"
         yaml_file.write_text(yaml_content, encoding="utf-8")
-        monkeypatch.setattr("config._find_file", lambda name: yaml_file if name == "gateway.yaml" else None)
+        monkeypatch.setattr(
+            "config._find_file",
+            lambda name: yaml_file if name == "gateway.yaml" else None,
+        )
 
         path, rules = reload_route_rules()
 
@@ -215,7 +229,10 @@ class TestReloadRouteRules:
         """)
         yaml_file = tmp_path / "gateway.yaml"
         yaml_file.write_text(yaml_v1, encoding="utf-8")
-        monkeypatch.setattr("config._find_file", lambda name: yaml_file if name == "gateway.yaml" else None)
+        monkeypatch.setattr(
+            "config._find_file",
+            lambda name: yaml_file if name == "gateway.yaml" else None,
+        )
 
         reload_route_rules()
         assert "alpha" in ROUTE_RULES
@@ -232,6 +249,7 @@ class TestReloadRouteRules:
 # ---------------------------------------------------------------------------
 # get_route_rule — accessor with fallback
 # ---------------------------------------------------------------------------
+
 
 class TestGetRouteRule:
     """Tests for the get_route_rule accessor."""

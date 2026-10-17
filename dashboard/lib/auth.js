@@ -1,64 +1,63 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect } from 'react';
-import { fetchWithAuth } from './api';
+import { API_BASE_URL } from './api';
+import { useRouter } from 'next/navigation';
 
 const AuthContext = createContext();
-
+function readUser(token) {
+  const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  const payload = JSON.parse(atob(part));
+  if (payload.exp * 1000 <= Date.now()) throw new Error('Session expired');
+  return { username: payload.sub, isAdmin: payload.is_admin === true };
+}
 export function AuthProvider({ children }) {
+  const router = useRouter();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
-    // Check if token exists
-    const token = localStorage.getItem('token');
-    if (token) {
-      // Decode token to get user info (assuming simple JWT without signature check on client)
+    const unauthorized = () => { setUser(null); router.replace('/login'); };
+    window.addEventListener('adaptive-gateway:unauthorized', unauthorized);
+    return () => window.removeEventListener('adaptive-gateway:unauthorized', unauthorized);
+  }, [router]);
+  useEffect(() => {
+    Promise.resolve().then(() => {
       try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        setUser({ username: payload.sub, isAdmin: payload.is_admin });
-      } catch (e) {
-        localStorage.removeItem('token');
+        const token = sessionStorage.getItem('token');
+        if (token) setUser(readUser(token));
+      } catch {
+        sessionStorage.removeItem('token');
+        sessionStorage.removeItem('refresh_token');
+      } finally {
+        setLoading(false);
       }
-    }
-    setLoading(false);
-  }, []);
-
-  const login = async (username, password) => {
-    const formData = new URLSearchParams();
-    formData.append('username', username);
-    formData.append('password', password);
-
-    const res = await fetch(`${process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8000'}/auth/token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData,
     });
-
-    if (!res.ok) {
-      throw new Error('Invalid credentials');
-    }
-
-    const data = await res.json();
-    localStorage.setItem('token', data.access_token);
-    
-    const payload = JSON.parse(atob(data.access_token.split('.')[1]));
-    setUser({ username: payload.sub, isAdmin: payload.is_admin });
+  }, []);
+  const login = async (email, password) => {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!response.ok) throw new Error('Login failed');
+    const data = await response.json();
+    const nextUser = readUser(data.access_token);
+    if (!nextUser.isAdmin) throw new Error('Administrator access required');
+    sessionStorage.setItem('token', data.access_token);
+    sessionStorage.setItem('refresh_token', data.refresh_token);
+    setUser(nextUser);
   };
-
-  const logout = () => {
-    localStorage.removeItem('token');
+  const logout = async () => {
+    const refresh = sessionStorage.getItem('refresh_token');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('refresh_token');
     setUser(null);
-    window.location.href = '/login';
+    try {
+      if (refresh) await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+    } finally { router.replace('/login'); }
   };
-
-  return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, loading, login, logout }}>{children}</AuthContext.Provider>;
 }
-
 export const useAuth = () => useContext(AuthContext);

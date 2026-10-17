@@ -32,12 +32,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import json
+import math
 import os
 import subprocess
 import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -78,6 +81,7 @@ CSV_FIELDS: list[str] = [
     "p95_latency_ms",
     "p99_latency_ms",
     "mean_size_bytes",
+    "partial_rate",
 ]
 
 
@@ -94,6 +98,7 @@ class RequestResult:
     status: int
     size_bytes: int
     success: bool
+    partial: bool = False
 
 
 @dataclass
@@ -138,12 +143,16 @@ class ConditionStats:
         if not samples:
             return 0.0
         # Nearest-rank method: avoids interpolation surprises on small samples.
-        rank = max(1, int(round(pct / 100.0 * len(samples))))
+        if not 0 <= pct <= 100:
+            raise ValueError("percentile must be in [0, 100]")
+        rank = max(1, math.ceil(pct / 100.0 * len(samples)))
         rank = min(rank, len(samples))
         return samples[rank - 1]
 
     def to_csv_row(self) -> dict[str, object]:
         """Serialise this aggregate into a CSV row dict."""
+        if not self.results:
+            raise ValueError("Cannot summarize an empty run")
         return {
             "condition": self.condition,
             "system": self.system,
@@ -154,6 +163,7 @@ class ConditionStats:
             "p95_latency_ms": round(self.percentile_ms(95), 2),
             "p99_latency_ms": round(self.percentile_ms(99), 2),
             "mean_size_bytes": round(self.mean_size_bytes, 1),
+            "partial_rate": sum(result.partial for result in self.results) / self.count,
         }
 
 
@@ -183,18 +193,12 @@ def setup_netem(interface: str, condition: str) -> None:
     Requires root and a *real* interface (netem does not work on ``lo``).
     Raises ``RuntimeError`` if the ``tc`` command fails.
     """
-    if interface == "lo":
-        print(
-            "  WARNING: tc netem does not work on the loopback interface (lo). "
-            "Use a real interface such as eth0."
-        )
+    if not interface.startswith("agw-"):
+        raise RuntimeError("Use a dedicated disposable agw-* interface in a netns")
     print(
         "  NOTE: tc netem requires root privileges (run with sudo) and a real "
         "network interface."
     )
-
-    # Always start from a clean slate so re-runs are deterministic.
-    teardown_netem(interface)
 
     netem_args = CONDITIONS.get(condition, {}).get("netem")
     if not netem_args:
@@ -202,7 +206,17 @@ def setup_netem(interface: str, condition: str) -> None:
         return
 
     proc = _run_tc(
-        ["qdisc", "add", "dev", interface, "root", "netem", *netem_args],  # type: ignore[list-item]
+        [
+            "qdisc",
+            "add",
+            "dev",
+            interface,
+            "root",
+            "handle",
+            "1a00:",
+            "netem",
+            *netem_args,
+        ],
         check=False,
     )
     if proc.returncode != 0:
@@ -215,14 +229,18 @@ def setup_netem(interface: str, condition: str) -> None:
 
 def teardown_netem(interface: str) -> None:
     """Remove any root qdisc from ``interface``; ignore "no such qdisc"."""
-    proc = _run_tc(["qdisc", "del", "dev", interface, "root"], check=False)
+    if not interface.startswith("agw-"):
+        raise RuntimeError("Refusing to modify a non-experiment interface")
+    proc = _run_tc(
+        ["qdisc", "del", "dev", interface, "root", "handle", "1a00:"], check=False
+    )
     if proc.returncode != 0:
         stderr = proc.stderr.strip().lower()
         # "no such file or directory" / "invalid argument" => nothing to delete.
-        if "no such" in stderr or "invalid argument" in stderr or "rtnetlink" in stderr:
+        if "no such" in stderr or "invalid argument" in stderr:
             print(f"  No existing qdisc on {interface} to remove.")
         else:
-            print(f"  WARNING: tc qdisc del on {interface} returned: {stderr}")
+            raise RuntimeError(f"Failed to remove experiment netem: {stderr}")
 
 
 # --------------------------------------------------------------------------- #
@@ -250,14 +268,18 @@ async def _one_request(
     async with sem:
         start = time.perf_counter()
         try:
-            resp = await client.get(url, headers=headers)
-            latency = time.perf_counter() - start
-            body = resp.content
+            async with client.stream("GET", url, headers=headers) as resp:
+                size = sum([len(chunk) async for chunk in resp.aiter_raw()])
+                latency = time.perf_counter() - start
             return RequestResult(
                 latency_s=latency,
                 status=resp.status_code,
-                size_bytes=len(body),
-                success=resp.status_code < 500,
+                size_bytes=size,
+                success=200 <= resp.status_code < 300,
+                partial=(
+                    resp.status_code == 206
+                    or resp.headers.get("x-response-completeness") == "reduced"
+                ),
             )
         except (httpx.HTTPError, OSError):
             latency = time.perf_counter() - start
@@ -279,6 +301,13 @@ async def run_load(
     timeout_s: float,
 ) -> ConditionStats:
     """Fire ``n_requests`` against ``base_url + path`` with bounded concurrency."""
+    if (
+        n_requests <= 0
+        or concurrency <= 0
+        or not math.isfinite(timeout_s)
+        or timeout_s <= 0
+    ):
+        raise ValueError("Request count, concurrency and timeout must be positive")
     url = base_url.rstrip("/") + path
     headers = _headers_for(condition)
     sem = asyncio.Semaphore(concurrency)
@@ -292,7 +321,11 @@ async def run_load(
         max_connections=concurrency, max_keepalive_connections=concurrency
     )
     async with httpx.AsyncClient(
-        timeout=timeout_s, limits=limits, follow_redirects=True
+        timeout=timeout_s,
+        limits=limits,
+        follow_redirects=False,
+        trust_env=False,
+        cookies=None,
     ) as client:
         tasks = [
             asyncio.create_task(_one_request(client, url, headers, sem))
@@ -323,6 +356,37 @@ def write_csv(rows: Iterable[ConditionStats], out_path: Path) -> None:
         for stat in rows:
             writer.writerow(stat.to_csv_row())
     print(f"\nWrote results to {out_path}")
+
+
+def write_raw(stats: list[ConditionStats], path: Path) -> None:
+    """Preserve every request, including HTTP errors, partials and timeouts."""
+    fields = [
+        "condition",
+        "system",
+        "request",
+        "latency_s",
+        "status",
+        "size_bytes",
+        "success",
+        "partial",
+    ]
+    with path.open("x", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for stat in stats:
+            for index, result in enumerate(stat.results, 1):
+                writer.writerow(
+                    {
+                        "condition": stat.condition,
+                        "system": stat.system,
+                        "request": index,
+                        "latency_s": result.latency_s,
+                        "status": result.status,
+                        "size_bytes": result.size_bytes,
+                        "success": result.success,
+                        "partial": result.partial,
+                    }
+                )
 
 
 def print_summary(stats: list[ConditionStats]) -> None:
@@ -356,7 +420,7 @@ def print_improvement(stats: list[ConditionStats]) -> None:
     if not has_baseline:
         return
 
-    print("\nADAPTIVE vs BASELINE (positive = adaptive is better)")
+    print("\nADAPTIVE vs BASELINE (positive = reduction; compare completeness/errors)")
     print(f"{'condition':<10} {'p95 latency':>14} {'mean size':>14}")
     print("-" * 40)
     for cond in conditions:
@@ -481,6 +545,8 @@ async def run_experiment(args: argparse.Namespace) -> list[ConditionStats]:
     unknown = [c for c in conditions if c not in CONDITIONS]
     if unknown:
         raise SystemExit(f"Unknown condition(s): {', '.join(unknown)}")
+    if not conditions or len(set(conditions)) != len(conditions):
+        raise SystemExit("Provide at least one condition, without duplicates")
 
     all_stats: list[ConditionStats] = []
 
@@ -488,38 +554,28 @@ async def run_experiment(args: argparse.Namespace) -> list[ConditionStats]:
         print(f"\n=== Condition: {condition} ===")
         netem_applied = False
         if not args.no_netem:
-            try:
-                setup_netem(args.interface, condition)
-                netem_applied = CONDITIONS[condition]["netem"] is not None
-            except RuntimeError as exc:
-                print(f"  ERROR applying netem: {exc}")
-                print("  Continuing as a plain load test for this condition.")
+            setup_netem(args.interface, condition)
+            netem_applied = CONDITIONS[condition]["netem"] is not None
         else:
             print("  --no-netem: skipping tc netem, using client hints only.")
 
         try:
-            adaptive_stats = await run_load(
-                base_url=args.target,
-                path=args.path,
-                condition=condition,
-                system="adaptive",
-                n_requests=args.requests,
-                concurrency=args.concurrency,
-                timeout_s=args.timeout,
-            )
-            all_stats.append(adaptive_stats)
-
+            systems = [("adaptive", args.target)]
             if args.baseline:
-                baseline_stats = await run_load(
-                    base_url=args.baseline,
+                systems.append(("baseline", args.baseline))
+            if args.system_order == "baseline-first":
+                systems.reverse()
+            for system, base_url in systems:
+                stat = await run_load(
+                    base_url=base_url,
                     path=args.path,
                     condition=condition,
-                    system="baseline",
+                    system=system,
                     n_requests=args.requests,
                     concurrency=args.concurrency,
                     timeout_s=args.timeout,
                 )
-                all_stats.append(baseline_stats)
+                all_stats.append(stat)
         finally:
             if netem_applied:
                 print(f"  Tearing down netem on {args.interface}.")
@@ -573,13 +629,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--interface",
-        default="eth0",
+        default="agw-link",
         help="Network interface for tc netem (must be a real NIC, not lo).",
     )
     parser.add_argument(
         "--no-netem",
         action="store_true",
+        default=True,
         help="Skip tc netem; just load test using client-hint headers.",
+    )
+    parser.add_argument(
+        "--netem",
+        dest="no_netem",
+        action="store_false",
+        help="Opt in to netem on a disposable agw-* netns interface",
+    )
+    parser.add_argument(
+        "--system-order",
+        choices=["adaptive-first", "baseline-first"],
+        default="adaptive-first",
+    )
+    parser.add_argument(
+        "--impairment-label",
+        default="client-hints-only",
+        help="Record externally managed topology/impairment; does not apply it",
     )
     parser.add_argument(
         "--charts",
@@ -604,7 +677,12 @@ async def async_main(argv: list[str] | None = None) -> int:
     """Async entrypoint: parse args, run the experiment, emit outputs."""
     args = build_parser().parse_args(argv)
 
-    if args.requests <= 0 or args.concurrency <= 0:
+    if (
+        args.requests <= 0
+        or args.concurrency <= 0
+        or not math.isfinite(args.timeout)
+        or args.timeout <= 0
+    ):
         raise SystemExit("--requests and --concurrency must be positive integers.")
 
     print("Adaptive API Gateway - Week 7 Experiment")
@@ -612,7 +690,19 @@ async def async_main(argv: list[str] | None = None) -> int:
     print(f"  baseline = {args.baseline or '(none)'}")
     print(f"  path     = {args.path}")
     print(f"  requests = {args.requests}  concurrency = {args.concurrency}")
-    if not args.no_netem and os.geteuid() != 0:
+    out_path = Path(args.out)
+    if any(
+        path.exists()
+        for path in (
+            out_path,
+            out_path.with_suffix(".raw.csv"),
+            out_path.with_suffix(".manifest.json"),
+        )
+    ):
+        raise SystemExit(
+            "Output already exists; use a new --out path to preserve evidence"
+        )
+    if not args.no_netem and getattr(os, "geteuid", lambda: -1)() != 0:
         print(
             "  WARNING: not running as root; tc netem calls use sudo and may "
             "prompt or fail. Use --no-netem for a pure load test."
@@ -623,12 +713,30 @@ async def async_main(argv: list[str] | None = None) -> int:
         print("No results collected.")
         return 1
 
-    out_path = Path(args.out)
     write_csv(stats, out_path)
+    write_raw(stats, out_path.with_suffix(".raw.csv"))
+    import platform
+
+    manifest = {
+        "started_or_completed_utc": datetime.now(UTC).isoformat(),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "arguments": vars(args),
+        "impairment": "managed-netem" if not args.no_netem else args.impairment_label,
+        "size_unit": "encoded HTTP body bytes, excludes headers/TLS/TCP/IP",
+        "percentile": "nearest rank ceil(p/100*n), includes failed requests",
+    }
+    out_path.with_suffix(".manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
     print_summary(stats)
     print_improvement(stats)
 
-    artifacts: list[Path] = [out_path]
+    artifacts: list[Path] = [
+        out_path,
+        out_path.with_suffix(".raw.csv"),
+        out_path.with_suffix(".manifest.json"),
+    ]
     if args.charts:
         artifacts.extend(generate_charts(stats, out_path.parent))
 

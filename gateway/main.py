@@ -26,15 +26,19 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cache.redis_client import close_redis
 from config import ROUTE_RULES, get_loaded_yaml_path, settings
 from middleware.auth import AuthMiddleware
+from middleware.body_limit import BodyLimitMiddleware
 from middleware.network_detector import NetworkDetectorMiddleware
 from middleware.rate_limit import RateLimitMiddleware
 from middleware.response_optimizer import ResponseOptimizerMiddleware
-from models.db import init_models
+from models.db import engine, init_models
 from offline_queue.sync_worker import SyncWorker
 from routes import admin, auth, proxy
 from utils.request_logger import get_log_writer
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+# HTTPX's INFO logs contain full URLs, including potentially sensitive queries.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
@@ -52,7 +56,8 @@ log = structlog.get_logger()
 async def lifespan(app: FastAPI):
     # Shared upstream HTTP client (connection pooling across all requests).
     app.state.http_client = httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
+        trust_env=False,
         timeout=settings.upstream_timeout_seconds,
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
@@ -60,8 +65,8 @@ async def lifespan(app: FastAPI):
         # Dev/Codespaces convenience; production schema is managed by Alembic.
         try:
             await init_models()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("startup.init_models_failed", error=str(exc))
+        except Exception:  # noqa: BLE001
+            log.warning("startup.init_models_failed")
 
     worker = SyncWorker()
     worker.start()
@@ -84,8 +89,10 @@ async def lifespan(app: FastAPI):
     finally:
         await worker.stop()
         await log_writer.stop()
+        await proxy.stop_background_tasks()
         await app.state.http_client.aclose()
         await close_redis()
+        await engine.dispose()
         log.info("gateway.shutdown")
 
 
@@ -107,12 +114,24 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(NetworkDetectorMiddleware)
 if settings.rate_limit_enabled:
     app.add_middleware(RateLimitMiddleware)
+app.add_middleware(BodyLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-Network-Quality",
+        "X-Adaptive-Mode",
+        "X-Response-Completeness",
+        "X-Cache-Status",
+        "X-Cache-Age",
+        "X-Queue-Id",
+        "X-RTT-Ms",
+        "X-RTT-Source",
+        "Retry-After",
+    ],
 )
 
 # Routers.
@@ -121,7 +140,7 @@ app.include_router(proxy.router, prefix="/proxy", tags=["proxy"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 
 
-@app.get("/health", tags=["health"])
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["health"])
 async def health_check() -> dict:
     """Liveness probe used by docker-compose and load balancers."""
     return {"status": "ok", "version": settings.version}

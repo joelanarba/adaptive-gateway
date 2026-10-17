@@ -10,9 +10,10 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from auth.dependencies import require_admin
 from auth.security import generate_api_key, hash_password
@@ -83,7 +84,12 @@ async def get_config() -> dict:
 @router.post("/reload-config")
 async def reload_config() -> dict:
     """Re-read gateway.yaml and apply new route rules without restart."""
-    path, rules = reload_route_rules()
+    try:
+        path, rules = reload_route_rules()
+    except (ValueError, OSError):
+        raise HTTPException(
+            400, "invalid configuration; active policy retained"
+        ) from None
     log.info(
         "admin.config_reloaded",
         source=str(path) if path else "(built-in defaults)",
@@ -143,8 +149,26 @@ async def list_api_keys(db: AsyncSession = Depends(get_db)) -> list[APIKey]:
     return list(result.scalars().all())
 
 
+@router.delete("/api-keys/{key_id}", status_code=204)
+async def revoke_api_key(
+    key_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    key = await db.get(APIKey, key_id)
+    if key is None:
+        raise HTTPException(404, "API key not found")
+    key.is_active = False
+    await db.commit()
+    return Response(status_code=204)
+
+
 @router.delete("/cache")
 async def flush_cache(prefix: str | None = Query(default="cache:")) -> dict:
+    if (
+        not prefix
+        or not prefix.startswith("cache:")
+        or any(char in prefix for char in "*?[]")
+    ):
+        raise HTTPException(400, "prefix must name the cache namespace without globs")
     redis = get_redis()
     pattern = f"{prefix}*"
     deleted = 0
@@ -168,7 +192,7 @@ async def create_admin_user(
         )
     user = User(
         email=payload.email,
-        hashed_password=hash_password(payload.password),
+        hashed_password=await run_in_threadpool(hash_password, payload.password),
         is_admin=True,
     )
     db.add(user)

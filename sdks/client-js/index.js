@@ -5,8 +5,6 @@
  * (RTT and ECT) and injects the corresponding headers so the gateway can optimize payloads.
  */
 
-let lastRtt = null;
-let lastPingTime = 0;
 const PING_INTERVAL_MS = 60000; // Ping once a minute max
 
 /**
@@ -36,10 +34,14 @@ async function measureRtt(pingUrl) {
  * @returns {Function} - A patched fetch function.
  */
 function createAdaptiveFetch({ gatewayUrl, pingEndpoint = "/health", autoPing = true }) {
+  let lastRtt = null;
+  let lastPingTime = 0;
+  let pingInFlight = false;
   const pingUrl = `${gatewayUrl.replace(/\/$/, "")}${pingEndpoint}`;
 
   return async function adaptiveFetch(input, init = {}) {
-    const headers = new Headers(init.headers || {});
+    const headers = new Headers(input instanceof Request ? input.headers : {});
+    new Headers(init.headers || {}).forEach((value, name) => headers.set(name, value));
 
     // 1. Inject ECT (Effective Connection Type) if available
     if (typeof navigator !== "undefined" && navigator.connection && navigator.connection.effectiveType) {
@@ -54,13 +56,14 @@ function createAdaptiveFetch({ gatewayUrl, pingEndpoint = "/health", autoPing = 
     // 3. Inject X-Client-RTT (either cached or eagerly measured)
     if (autoPing) {
       const now = Date.now();
-      if (lastRtt === null || now - lastPingTime > PING_INTERVAL_MS) {
+      if (!pingInFlight && now - lastPingTime > PING_INTERVAL_MS) {
         // Run asynchronously so we don't block this request, but we'll have it for the next one.
         // Alternatively, we could await it here for the *first* request.
         lastPingTime = now;
+        pingInFlight = true;
         measureRtt(pingUrl).then((rtt) => {
           if (rtt !== null) lastRtt = rtt;
-        });
+        }).finally(() => { pingInFlight = false; });
       }
       
       if (lastRtt !== null) {
@@ -70,7 +73,9 @@ function createAdaptiveFetch({ gatewayUrl, pingEndpoint = "/health", autoPing = 
 
     // Pass the modified headers to the underlying fetch
     const newInit = { ...init, headers };
-    return fetch(input, newInit);
+    const target = typeof input === 'string' && input.startsWith('/')
+      ? `${gatewayUrl.replace(/\/$/, '')}${input}` : input;
+    return fetch(target, newInit);
   };
 }
 

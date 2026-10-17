@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from jose import JWTError
+from jwt import PyJWTError as JWTError
 
 from auth.security import (
     create_access_token,
@@ -25,10 +25,11 @@ def test_password_hash_roundtrip():
     assert not verify_password("wrong", h)
 
 
-def test_password_over_72_bytes_does_not_raise():
+def test_password_over_72_bytes_rejected_without_truncation():
     long_pw = "a" * 200
-    h = hash_password(long_pw)
-    assert verify_password(long_pw, h)
+    with pytest.raises(ValueError):
+        hash_password(long_pw)
+    assert not verify_password(long_pw, hash_password("a" * 72))
 
 
 def test_access_token_roundtrip():

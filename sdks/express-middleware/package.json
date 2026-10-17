@@ -4,7 +4,7 @@
   "description": "Express middleware to automatically strip payload fields on degraded connections.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test ../tests/*.test.js"
   },
   "author": "Joel",
   "license": "MIT"

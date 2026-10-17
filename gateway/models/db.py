@@ -46,9 +46,11 @@ from config import settings
 # scopes; a pooled asyncpg connection bound to one loop then fails to be reused
 # or torn down on another. NullPool opens a fresh connection per operation,
 # sidestepping cross-loop reuse. Production keeps the default pooled engine.
-_engine_kwargs: dict = {"echo": False, "pool_pre_ping": True}
-if os.environ.get("PYTEST_RUNNING") == "1":
-    _engine_kwargs = {"echo": False, "poolclass": NullPool}
+_engine_kwargs: dict = {"echo": False, "pool_pre_ping": True, "hide_parameters": True}
+if os.environ.get("PYTEST_RUNNING") == "1" and not settings.database_url.startswith(
+    "sqlite"
+):
+    _engine_kwargs = {"echo": False, "poolclass": NullPool, "hide_parameters": True}
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 

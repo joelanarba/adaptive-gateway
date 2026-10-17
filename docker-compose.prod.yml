@@ -10,28 +10,41 @@
 services:
 
   gateway:
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --no-proxy-headers --limit-concurrency 32 --backlog 128 --timeout-keep-alive 5
     # Run the baked image, not live source. Override the dev bind-mount with an
     # empty list so /app is the code copied in at build time.
-    volumes:
+    volumes: !override
       - ./gateway.yaml:/app/gateway.yaml:ro
+    ports: !reset []
     environment:
       # Force production behaviour regardless of what .env carries.
       ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY:?Set a unique production signing key}
+      RATE_LIMIT_ENABLED: "true"
     restart: always
     # Cap resources for a small EC2 t2.micro (1 vCPU / 1 GiB).
     mem_limit: 512m
     mem_reservation: 256m
     cpus: "0.75"
 
+  dashboard:
+    command: npm run start
+    build:
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:?Set the public HTTPS gateway URL before building}
+    volumes: !reset []
+    environment:
+      NODE_ENV: production
+
   nginx:
     # Production config terminates TLS and proxies to the gateway.
-    volumes:
+    volumes: !override
       - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
       # Let's Encrypt certificates issued/renewed by certbot.
       - ./certbot/conf:/etc/letsencrypt:ro
       # ACME http-01 challenge webroot (read-only for nginx).
       - ./certbot/www:/var/www/certbot:ro
-    ports:
+    ports: !override
       - "80:80"
       - "443:443"
     restart: always
@@ -62,12 +75,16 @@ services:
   #     - gateway-net
 
   redis:
+    ports: !reset []
     # Data volume (redis-data) is inherited from the base file.
     restart: always
     mem_limit: 384m
     mem_reservation: 256m
 
   postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique database password}
     # Data volume (postgres-data) is inherited from the base file.
     restart: always
     mem_limit: 512m
@@ -77,8 +94,17 @@ services:
     restart: unless-stopped
 
   grafana:
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        if [ "$${#GF_SECURITY_ADMIN_PASSWORD}" -lt 16 ]; then
+          echo 'Set a Grafana admin password of at least 16 characters' >&2
+          exit 1
+        fi
+        exec /run.sh
     restart: unless-stopped
     environment:
       # Admin password sourced from the environment; never bake a default in prod.
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Set a unique Grafana password}
       GF_USERS_ALLOW_SIGN_UP: "false"

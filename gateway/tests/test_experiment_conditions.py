@@ -22,7 +22,7 @@ if str(_BENCH_DIR) not in sys.path:
 import run_experiment  # noqa: E402
 
 
-def _capture_tc_calls(condition: str, interface: str = "eth0") -> list[list[str]]:
+def _capture_tc_calls(condition: str, interface: str = "agw-link") -> list[list[str]]:
     """Run ``setup_netem`` with ``subprocess.run`` mocked; return every argv."""
     calls: list[list[str]] = []
 
@@ -50,8 +50,10 @@ def test_degraded_netem_argv_includes_rate_cap():
         "qdisc",
         "add",
         "dev",
-        "eth0",
+        "agw-link",
         "root",
+        "handle",
+        "1a00:",
         "netem",
         "delay",
         "200ms",
@@ -70,8 +72,10 @@ def test_poor_netem_argv_has_1s_delay_and_rate_cap():
         "qdisc",
         "add",
         "dev",
-        "eth0",
+        "agw-link",
         "root",
+        "handle",
+        "1a00:",
         "netem",
         "delay",
         "1000ms",
@@ -86,4 +90,4 @@ def test_good_applies_no_netem_qdisc():
     # GOOD is a clean link: only the teardown 'del' runs, never an 'add'.
     calls = _capture_tc_calls("GOOD")
     assert not any("add" in c for c in calls)
-    assert any("del" in c for c in calls)
+    assert not any("del" in c for c in calls)

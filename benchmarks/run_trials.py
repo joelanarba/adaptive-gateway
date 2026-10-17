@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import subprocess
 import sys
@@ -115,7 +116,14 @@ def run_trials(
     all_runs: list[list[dict[str, str]]] = []
     for i in range(1, trials + 1):
         out_path = runs_dir / f"run_{i:02d}.csv"
-        cmd = [sys.executable, str(runner), *forwarded, "--out", str(out_path)]
+        if out_path.exists():
+            raise ValueError(f"Refusing to overwrite trial evidence: {out_path}")
+        order = (
+            []
+            if any(arg.startswith("--system-order") for arg in forwarded)
+            else ["--system-order", "adaptive-first" if i % 2 else "baseline-first"]
+        )
+        cmd = [sys.executable, str(runner), *forwarded, *order, "--out", str(out_path)]
         print(f"\n[trial {i}/{trials}] $ {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
         all_runs.append(parse_run_csv(out_path))
@@ -159,7 +167,35 @@ def aggregate(runs: list[list[dict[str, str]]]) -> list[dict[str, object]]:
     deviation (n-1; ``0.0`` for a single trial), and the trial count. Non-numeric
     or missing cells are skipped rather than raising.
     """
+    if not runs or any(not run for run in runs):
+        raise ValueError("Every trial must contain results")
     metric_cols = _metric_columns(runs)
+    if not metric_cols:
+        raise ValueError("Trial has no metrics")
+    expected_pairs = None
+    for run in runs:
+        seen = set()
+        for row in run:
+            pair = (row.get("condition"), row.get("system"))
+            if not all(pair) or pair in seen:
+                raise ValueError("Missing or duplicate condition/system pair")
+            seen.add(pair)
+            if set(row) != set(KEY_COLUMNS) | set(metric_cols):
+                raise ValueError("Trial schemas differ")
+            for metric in metric_cols:
+                try:
+                    value = float(row[metric])
+                except (ValueError, TypeError):
+                    raise ValueError(f"Invalid metric: {metric}") from None
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError(f"Invalid metric: {metric}")
+                if metric == "requests" and (value <= 0 or not value.is_integer()):
+                    raise ValueError("Trial request count must be a positive integer")
+                if metric.endswith("_rate") and value > 1:
+                    raise ValueError("Rates must be in [0, 1]")
+        if expected_pairs is not None and seen != expected_pairs:
+            raise ValueError("Trials contain different conditions/systems")
+        expected_pairs = seen
     series: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     pairs: list[tuple[str, str]] = []
 
@@ -310,7 +346,10 @@ def print_improvement(agg_rows: list[dict[str, object]]) -> None:
     if "baseline" not in systems or "adaptive" not in systems:
         return
 
-    print("\nADAPTIVE vs BASELINE on trial means (positive = adaptive is better)")
+    print(
+        "\nADAPTIVE vs BASELINE on trial means "
+        "(positive = reduction; compare completeness/errors)"
+    )
     print(f"{'condition':<10} {'p95 latency':>14} {'mean size':>14}")
     print("-" * 40)
     for condition in conditions:

@@ -13,11 +13,14 @@ from cache.redis_client import (
 )
 
 
-def test_cache_key_is_query_order_independent():
+def test_cache_key_preserves_query_order():
     k1 = build_cache_key("GET", "/proxy/x/posts", "a=1&b=2")
     k2 = build_cache_key("GET", "/proxy/x/posts", "b=2&a=1")
-    assert k1 == k2
-    assert k1.startswith("cache:GET:/proxy/x/posts:")
+    assert k1 != k2
+    assert k1.startswith("cache:v2:")
+    assert build_cache_key("GET", "/x", "id=1&id=2") != build_cache_key(
+        "GET", "/x", "id=2&id=1"
+    )
 
 
 def test_cache_key_changes_with_path_and_method():

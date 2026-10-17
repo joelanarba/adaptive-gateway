@@ -7,7 +7,7 @@ Rules:
 - Access token TTL 15 min; refresh token TTL 7 days, stored server-side
   (we persist only a SHA-256 hash so a DB leak does not expose live tokens).
 - Never log tokens or passwords.
-- JWT ``exp`` is a Unix timestamp in **seconds** (python-jose handles this).
+- JWT ``exp`` is a Unix timestamp in **seconds** (PyJWT handles this).
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from passlib.context import CryptContext
 
 from config import settings
@@ -38,19 +39,16 @@ pwd_context = CryptContext(
 )
 
 
-def _truncate(password: str) -> str:
-    encoded = password.encode("utf-8")
-    if len(encoded) <= _BCRYPT_MAX_BYTES:
-        return password
-    return encoded[:_BCRYPT_MAX_BYTES].decode("utf-8", "ignore")
-
-
 def hash_password(password: str) -> str:
-    return pwd_context.hash(_truncate(password))
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        raise ValueError("Password exceeds bcrypt's 72-byte limit")
+    return pwd_context.hash(password)
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return pwd_context.verify(_truncate(password), hashed)
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        return False
+    return pwd_context.verify(password, hashed)
 
 
 def _now() -> datetime:
@@ -77,9 +75,12 @@ def create_access_token(
 def decode_access_token(token: str) -> dict[str, Any]:
     """Decode and validate a JWT access token. Raises ``JWTError`` if invalid."""
     payload = jwt.decode(
-        token, settings.secret_key, algorithms=[settings.jwt_algorithm]
+        token,
+        settings.secret_key,
+        algorithms=[settings.jwt_algorithm],
+        options={"require": ["exp", "iat", "sub"]},
     )
-    if payload.get("type") != "access":
+    if payload.get("type") != "access" or not payload.get("sub"):
         raise JWTError("not an access token")
     return payload
 

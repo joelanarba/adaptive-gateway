@@ -1,548 +1,270 @@
 # Adaptive API Gateway
 
-A network-aware reverse proxy that detects each client's connection quality and
-**adapts API responses on the fly** to stay usable on slow, lossy links. It is
-built for the West African / Ghanaian low-connectivity context, where the same
-endpoint may be hit from fibre in Accra and from a congested 2G cell on the
-coast — and the payload that is fine for one is unusable on the other.
+An experimental FastAPI reverse proxy for applications serving clients on
+unreliable or expensive connections, motivated by connectivity constraints in
+Ghana. It uses client network hints to select full, field-reduced or skeleton
+JSON responses, with optional gzip, Redis caching and an opt-in write queue.
 
-The gateway classifies every request into `GOOD`, `DEGRADED`, or `POOR` and
-reshapes the response accordingly: full payloads on good links, stripped and
-compressed payloads on degraded ones, and stale-cache or minimal skeleton
-payloads when the link is poor. Every decision is instrumented in Prometheus —
-those metrics double as the dataset for an
-[ACM COMPASS](https://acm-compass.org/) (Computing and Sustainable Societies)
-research paper. The project also serves as a backend portfolio piece.
-
-> **Author:** Joel Anarba — CS undergraduate, University of Cape Coast, Ghana.
-
-![status](https://img.shields.io/badge/status-research--WIP-orange)
-![python](https://img.shields.io/badge/python-3.11-blue)
-![framework](https://img.shields.io/badge/framework-FastAPI-009688)
-![license](https://img.shields.io/badge/license-MIT-green)
-
----
+For backend developers and distributed-systems students studying the tradeoff
+between transmitted bytes, response completeness, latency and server overhead.
+It is a portfolio/research prototype, **not production-ready or research-validated**.
+Performance results are pending. See [the audit](docs/PROJECT_AUDIT.md) for verification, dependency scan results
+and remaining deployment checks.
 
 ## Architecture
 
-```
-                         ┌──────────────────────────────────────────────────┐
-                         │                Gateway Core (FastAPI)             │
-                         │                                                    │
- Client ──▶ Nginx ──────┼─▶ CORS ─▶ RateLimit(opt-in) ─▶ NetworkDetector ──┐ │
- (X-Client-RTT,         │                                                  │ │
-  ECT, Save-Data)       │   ┌──────────────────────────────────────────┐  │ │
-                        │   │  Auth (JWT / API key)                     │◀─┘ │
-                        │   │     ▼                                      │    │
-                        │   │  ResponseOptimizer (innermost) ───────────┼──▶ Routes
-                        │   └──────────────────────────────────────────┘    │ /auth /proxy
-                        │                                                    │ /admin /health
-                        └───────────────┬─────────────────┬──────────────┬──┘
-                                        │                 │              │
-                                   ┌────▼───┐        ┌─────▼────┐   ┌─────▼──────┐
-                                   │ Redis  │        │ Postgres │   │  Upstream  │
-                                   │ cache  │        │ users/   │   │  services  │
-                                   │ +queue │        │ logs/cfg │   │ (proxied)  │
-                                   └────────┘        └──────────┘   └────────────┘
-
- Observability:  Gateway /metrics ──▶ Prometheus ──▶ Grafana (auto-provisioned dashboard)
+```mermaid
+flowchart LR
+    Client --> Nginx[Optional Nginx front door]
+    Nginx --> Gateway[FastAPI gateway]
+    Client --> Dashboard[Next.js admin dashboard]
+    Dashboard --> Gateway
+    Gateway --> Upstreams[Explicitly configured HTTP upstreams]
+    Gateway --> Redis[Redis: cache / classifier / replay stream]
+    Gateway --> PostgreSQL[PostgreSQL: users / token hashes / logs / dead letters]
+    Gateway --> Metrics[Prometheus scrape]
+    Metrics --> Grafana
 ```
 
-The middleware stack is registered outermost → innermost:
+Middleware, outer to inner: CORS, request target/body boundary, optional global
+rate limiter, network classifier, authentication, response optimizer, routes.
+Authentication always guards `/admin/*`; public proxy requests are permitted.
+Missing credentials do not bypass administrative authorization.
 
-1. **CORS**
-2. **RateLimit** — opt-in coarse per-client cap (`RATE_LIMIT_ENABLED`); the
-   login limiter is always on
-3. **NetworkDetector** — classifies the tier and sets
-   `request.state.network_quality` *before* the response is generated
-4. **Auth** — populates identity from a JWT Bearer token or API key
-5. **ResponseOptimizer** — innermost, so it reshapes the route's raw response
-   while still seeing the tier set by the outer NetworkDetector
+## Adaptation contract
 
-### Network quality tiers
+Signal priority is valid finite nonnegative `X-Client-RTT` (milliseconds), then
+case-insensitive `ECT`, then `Save-Data: on`, then stored passive state, then GOOD.
+Malformed RTT hints are ignored so the next signal can apply. Missing signals
+are not evidence of a measured good connection.
 
-| Tier       | Trigger (default thresholds)        | What the gateway does |
-|------------|-------------------------------------|------------------------|
-| `GOOD`     | link RTT `< 150 ms`                 | Pass the response through unchanged. |
-| `DEGRADED` | link RTT `≥ 150 and < 500 ms`       | Strip the route's `optional_fields` from JSON, then gzip (if the client accepts it and the body is worth compressing). |
-| `POOR`     | link RTT `≥ 500 ms`                 | If a cached/stale copy was already served, return it (stripped + gzipped). Otherwise return a minimal **skeleton** (optional fields removed, arrays truncated) with HTTP `206` to signal a partial payload. |
+| Tier | Default RTT interval | Successful JSON GET behavior |
+| --- | --- | --- |
+| GOOD | `[0, 150)` ms | Body unchanged; no gateway gzip |
+| DEGRADED | `[150, 500)` ms | Remove configured optional paths; gzip if accepted and smaller |
+| POOR | `[500, infinity)` ms | Cached copy: strip optional paths; uncached copy: also truncate arrays recursively to 10 items |
 
-Thresholds are configurable via `RTT_GOOD_THRESHOLD_MS` and
-`RTT_DEGRADED_THRESHOLD_MS`.
+ECT maps `4g` to GOOD, `3g` to DEGRADED and `2g`/`slow-2g` to POOR.
+Nested paths such as `meta.debug` traverse objects and arrays. Fields not
+configured for removal are retained, except array truncation in skeleton mode.
+Non-200, range, non-JSON, empty, malformed JSON and `no-transform` responses are
+not reshaped. Writes are not reshaped. Upstream redirects are returned, never
+followed by the gateway.
 
-### How adaptation works
+Skeletons retain HTTP 200 and use `X-Adaptive-Mode: skeleton` and
+`X-Response-Completeness: reduced`. Earlier code used 206, which denotes HTTP
+range responses rather than application-level field omission. Changed
+representations lose upstream validators/digests/range metadata and receive
+`private, no-store`. Vary includes the hint and encoding headers.
 
-True end-to-end RTT is not directly observable inside an ASGI app, and total
-request duration conflates the client link with upstream latency. The
-`NetworkDetector` therefore derives the tier from multiple signals, in priority
-order:
+Redis stores EWMA and hysteresis state (alpha 0.3; 30 ms dwell band; three samples
+for a transition). The fallback subtracts upstream time from server processing
+elapsed time. **That is not client-link RTT** and is not a validated estimator.
+Redis transactions prevent stale overwrites; bounded contention retries can skip samples. Use explicit hints for deterministic
+functional demonstrations; they do not impose real network impairment.
 
-1. **`X-Client-RTT`** — RTT in ms measured and reported by the client.
-2. **`ECT`** — Effective Connection Type (`4g` → GOOD, `3g` → DEGRADED,
-   `2g`/`slow-2g` → POOR).
-3. **`Save-Data: on`** — explicit request to conserve data → DEGRADED.
-4. **A per-client EWMA** of recently observed link latency (a passive estimate:
-   `total_elapsed − upstream_latency`, folded in after each response).
-5. **Default `GOOD`** when nothing is known.
+## Stack and prerequisites
 
-Clients are encouraged to send `X-Client-RTT` / `ECT` for deterministic
-classification; the passive EWMA is a documented fallback.
+Python 3.11 or 3.12; FastAPI/HTTPX; SQLAlchemy/asyncpg/Alembic; Redis 7.2;
+PostgreSQL 16; Nginx; Prometheus; Grafana; Next.js 16.4.2/React 19; Node.js 22 (container/CI target) or 24 (locally verified).
+Runtime pins live in `gateway/requirements.txt`; root `requirements.txt` includes
+that same file to keep host and image dependencies consistent. Extra in-process test dependencies are in
+`requirements-dev.txt`. The dashboard has an npm lockfile.
 
----
+Docker Desktop/Engine must be running for live datastore or container checks.
+Compose **2.24.4 or later** is required for production `!override`/`!reset` tags.
+The current audit environment validated Compose configuration but could not
+run a Docker server. Local test success does not verify these container images.
 
-## Tech stack
+## Local setup
 
-| Layer            | Technology                                   |
-|------------------|----------------------------------------------|
-| API framework    | FastAPI (Python 3.11), fully async           |
-| Upstream client  | httpx (pooled `AsyncClient`)                 |
-| Cache + queue    | Redis (response cache + offline write stream)|
-| Database         | PostgreSQL via SQLAlchemy 2.0 async + asyncpg|
-| Migrations       | Alembic                                      |
-| Reverse proxy    | Nginx                                        |
-| Auth             | JWT (access + rotating refresh) + API keys; bcrypt |
-| Metrics          | prometheus-client → Prometheus → Grafana     |
-| Logging          | structlog (JSON)                             |
-| Config           | pydantic-settings                            |
-| Containers       | Docker + docker compose                      |
-| Cloud (target)   | AWS EC2 (t2.micro) + S3 for research export  |
-
----
-
-## Quickstart
-
-The Python app lives in `gateway/`, which is **also the import root** (code uses
-top-level imports like `from config import settings`). The ASGI app is
-`main:app`.
-
-### Option A — run the app on the host, datastores in Docker
-
-This is the fastest inner loop in a Codespace.
+Run from the repository root. Do not replace an existing local `.env` blindly.
+For a fresh checkout, copy `.env.example` to `.env`, then replace its signing-key
+placeholder using `python -c "import secrets; print(secrets.token_hex(32))"`.
+The sample datastore/Grafana credentials are **disposable local values only**.
+There are no built-in administrator credentials.
 
 ```bash
-# 1. Start only the stateful services.
-docker compose up -d redis postgres
-
-# 2. Configure secrets. .env already exists from .env.example; set a real key:
-#    (open .env and replace SECRET_KEY with the output of:)
-openssl rand -hex 32
-
-# 3. Run the gateway from the package root.
-cd gateway
-uvicorn main:app --reload --port 8000
+python -m venv .venv
+# Bash: source .venv/bin/activate
+# PowerShell: .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
 ```
 
-> In this environment the service hostnames `redis` and `postgres` are aliased
-> to `localhost` via `/etc/hosts`, so the default `DATABASE_URL` /
-> `REDIS_URL` work unchanged from the host. Inside Docker those names resolve
-> natively on the `gateway-net` network.
-
-On startup (when `ENVIRONMENT` is not production) the app creates the DB tables
-automatically via `init_models()`; production uses Alembic migrations instead.
-
-### Option B — Deploy to AWS (One-Click)
-
-The fastest way to deploy the Adaptive Gateway to your AWS account is via our CloudFormation template. This will automatically provision a `t3.micro` EC2 instance, install Docker, and launch the entire stack (Gateway, Postgres, Redis, Dashboard, Grafana).
-
-[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/quickcreate?templateURL=https%3A%2F%2Fraw.githubusercontent.com%2Fjoelanarba%2Fadaptive-gateway%2Fmain%2Faws-cloudformation.yml&stackName=AdaptiveGateway)
-
-### Option C — full stack in local Docker
+Full local stack:
 
 ```bash
-docker compose up --build
+docker compose config --quiet
+docker compose up --build -d
+docker compose logs gateway
+curl http://localhost:8000/health
 ```
 
-This brings up `gateway`, `nginx`, `redis`, `postgres`, `prometheus`, and
-`grafana`.
+| Service | Local URL |
+| --- | --- |
+| Gateway / docs | http://localhost:8000 / http://localhost:8000/docs |
+| Nginx HTTP front door | http://localhost:80 |
+| Admin dashboard | http://localhost:3000 |
+| Grafana | http://localhost:3001 |
+| Prometheus | http://localhost:9090 |
+| Plain baseline (optional profile) | http://localhost:9000 |
 
-### Service URLs
+Development ports bind loopback, including PostgreSQL and Redis. Docker service
+names resolve **inside Docker**, not automatically on a host OS.
+To run Python on the host, first start `docker compose up -d postgres redis`,
+then override datastore hostnames. PowerShell example (sample local values):
 
-| Service           | URL                              | Notes                       |
-|-------------------|----------------------------------|-----------------------------|
-| Gateway           | http://localhost:8000            | API root                    |
-| Interactive docs  | http://localhost:8000/docs       | Swagger UI (ReDoc at `/redoc`) |
-| Metrics           | http://localhost:8000/metrics    | Prometheus exposition       |
-| Prometheus        | http://localhost:9090            |                             |
-| Grafana           | http://localhost:3000            | login `admin` / `admin`     |
-| Nginx (full stack)| http://localhost:80              | TLS/proxy front door        |
+```powershell
+$env:DATABASE_URL = 'postgresql+asyncpg://gateway:gateway@localhost:5432/gateway'
+$env:REDIS_URL = 'redis://localhost:6379'
+python -m uvicorn main:app --app-dir gateway --host 127.0.0.1 --port 8000 --no-proxy-headers
+```
 
----
+Bash uses `export DATABASE_URL=...` and `export REDIS_URL=...` with the same values.
+The application creates tables in development. Production uses Alembic; it must
+not rely on development `create_all` behavior. Set `NEXT_PUBLIC_GATEWAY_URL` to the
+public HTTPS API URL before building the production dashboard, and configure
+CORS for its real browser origin. Public build-time values are not secrets.
 
-## API reference
-
-| Method | Path                          | Auth        | Description |
-|--------|-------------------------------|-------------|-------------|
-| `GET`  | `/health`                     | none        | Liveness probe → `{"status":"ok","version":...}` |
-| `GET`  | `/metrics`                    | none        | Prometheus exposition (mounted ASGI app) |
-| `POST` | `/auth/register`              | none        | Create a user (email + password) |
-| `POST` | `/auth/login`                 | none        | Exchange credentials for access + refresh tokens |
-| `POST` | `/auth/refresh`               | none        | Rotate a refresh token, get a fresh pair |
-| `POST` | `/auth/logout`                | none        | Revoke a refresh token |
-| `ANY`  | `/proxy/{service}/{path}`     | optional    | Reverse proxy to a configured upstream |
-| `GET`  | `/admin/queue`                | admin JWT   | Offline-queue depth / pending |
-| `GET`  | `/admin/stats`                | admin JWT   | Request counts by quality tier and cache status |
-| `GET`  | `/admin/config`               | admin JWT   | Effective thresholds, TTLs, route rules |
-| `GET`  | `/admin/diagnostics`          | admin JWT   | Redis / DB / queue health |
-| `GET`/`POST` | `/admin/api-keys`        | admin JWT   | List / issue machine API keys |
-| `DELETE` | `/admin/cache`              | admin JWT   | Flush cache keys by prefix |
-
-### Examples
+Create the first administrator interactively after tables exist:
 
 ```bash
-# Register a user
-curl -s -X POST http://localhost:8000/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"joel@example.com","password":"super-secret-pw"}'
-
-# Log in and capture the access token
-TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"joel@example.com","password":"super-secret-pw"}' \
-  | python -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
-
-# Call a proxied route on a GOOD link (full payload)
-curl -i http://localhost:8000/proxy/jsonplaceholder/posts/1
-
-# Same route, but pretend we are on a POOR 2G link.
-# Note the X-Network-Quality response header and the trimmed/skeleton body.
-curl -i http://localhost:8000/proxy/jsonplaceholder/posts \
-  -H 'X-Client-RTT: 800' \
-  -H 'Accept-Encoding: gzip'
-
-# Or signal the tier with the Effective Connection Type hint
-curl -i http://localhost:8000/proxy/jsonplaceholder/posts -H 'ECT: 3g'
-
-# Admin call with a Bearer token (requires an admin user)
-curl -s http://localhost:8000/admin/stats \
-  -H "Authorization: Bearer $TOKEN"
+docker compose exec gateway python manage.py create-admin --email admin@example.com
 ```
 
-### Response headers the gateway adds
+The password is prompted twice and never passed on the command line. Existing
+accounts are not silently promoted. Host equivalent: `python gateway/manage.py
+create-admin --email admin@example.com` with the host datastore overrides.
 
-| Header              | Meaning |
-|---------------------|---------|
-| `X-Network-Quality` | The tier applied to this request: `GOOD` / `DEGRADED` / `POOR`. |
-| `X-RTT-Ms`          | The link-RTT estimate (ms) used for classification. |
-| `X-Cache-Status`    | `HIT`, `STALE`, `MISS`, `PASS`, or `QUEUED`. |
+## API examples
 
-Proxied requests also gain `X-Forwarded-For`; cached responses include
-`X-Cache-Age`; queued writes return `202` with an `X-Queue-Id`.
-
----
-
-## Environment variables
-
-Copy `.env.example` to `.env` and fill in values (`.env` is gitignored). Key
-variables:
-
-| Variable                    | Default / example                                             | Purpose |
-|-----------------------------|---------------------------------------------------------------|---------|
-| `ENVIRONMENT`               | `development`                                                 | `production` enables Alembic-only schema management. |
-| `SECRET_KEY`                | *(generate)* `openssl rand -hex 32`                           | JWT signing secret. |
-| `POSTGRES_USER` / `_PASSWORD` / `_DB` | `gateway` / `gateway` / `gateway`                   | Postgres credentials. |
-| `DATABASE_URL`              | `postgresql+asyncpg://gateway:gateway@postgres:5432/gateway`  | Async DB DSN. |
-| `REDIS_URL`                 | `redis://redis:6379`                                          | Cache + offline queue. |
-| `RTT_GOOD_THRESHOLD_MS`     | `150`                                                         | GOOD/DEGRADED boundary (RTT `< 150` is GOOD). |
-| `RTT_DEGRADED_THRESHOLD_MS` | `500`                                                         | DEGRADED/POOR boundary (RTT `≥ 500` is POOR). |
-| `UPSTREAM_SERVICES`         | `{"jsonplaceholder":"https://jsonplaceholder.typicode.com"}`  | JSON map of `service → base URL`. |
-| `ALLOWED_ORIGINS`           | `["http://localhost:3000","http://localhost:8000"]`           | CORS origins (JSON array). |
-| `RATE_LIMIT_ENABLED`        | `false`                                                       | Toggle the coarse global limiter. |
-| `ALLOW_UNLISTED_UPSTREAMS`  | `true`                                                        | Automatically proxy to `{service}` hostname via Docker DNS if missing from `gateway.yaml`. |
-| `GRAFANA_PASSWORD`          | `admin`                                                       | Grafana admin password. |
-
-Per-route caching and field-stripping policy is configured in `gateway.yaml`
-(see the next section).
-
----
-
-## Auto-Discovery (Wildcard Upstreams)
-
-If `ALLOW_UNLISTED_UPSTREAMS=true` (the default), the gateway acts as a dynamic reverse proxy for your internal Docker network. 
-
-When you make a request to `/proxy/my-new-api:8080/path`, the gateway will automatically attempt to proxy traffic to `http://my-new-api:8080/path` using internal Docker DNS, even if `my-new-api` is not explicitly defined in `gateway.yaml`. This allows you to deploy new microservices in your `docker-compose.yml` and instantly securely expose them via the gateway with zero configuration.
-
----
-
-## Drop-in SDKs and Middleware
-
-To make the Adaptive Gateway entirely "plug and play", we provide drop-in SDKs to integrate directly into your frontend or backend.
-
-### Frontend Javascript Client
-
-The `@adaptive-gateway/client` provides a smart `fetch` wrapper that seamlessly measures RTT and injects network headers into your API calls.
-
-```javascript
-const { createAdaptiveFetch } = require('@adaptive-gateway/client');
-
-// Patches fetch to auto-ping the gateway and inject X-Client-RTT and ECT headers
-const adaptiveFetch = createAdaptiveFetch({ gatewayUrl: 'http://localhost:8000' });
-
-adaptiveFetch('http://localhost:8000/proxy/my-service/data')
-  .then(res => res.json())
-  .then(console.log);
-```
-
-### Express Middleware
-
-Don't want to run the python reverse proxy? You can add the payload stripping and connection detection logic directly into your Express backend using `@adaptive-gateway/express`.
-
-```javascript
-const express = require('express');
-const adaptiveGateway = require('@adaptive-gateway/express');
-
-const app = express();
-
-app.use(adaptiveGateway({
-  rttDegradedThresholdMs: 500,
-  stripFields: ['heavyImage', 'meta.largeData']
-}));
-
-app.get('/data', (req, res) => {
-  // If the client's connection is degraded, 'heavyImage' will automatically be stripped from this JSON!
-  res.json({
-    id: 1,
-    heavyImage: "base64...",
-    title: "Hello World"
-  });
-});
-```
-
----
-
-## Route configuration (`gateway.yaml`)
-
-The gateway reads a `gateway.yaml` file on startup to configure upstream
-services and per-route optimisation policy. Copy the example and customise:
+`/health` supports GET/HEAD and checks process liveness, not dependencies.
+`/metrics` is Prometheus text. Admin `/admin/diagnostics` checks dependencies.
+Examples below contact a configured public demonstration API; they are not a
+controlled benchmark. Adaptation is only applied to the proxy's JSON responses.
 
 ```bash
-cp gateway.yaml.example gateway.yaml
+curl -H 'X-Client-RTT: 50' http://localhost:8000/proxy/jsonplaceholder/posts
+curl --compressed -H 'ECT: 3g' http://localhost:8000/proxy/jsonplaceholder/posts
+curl --compressed -H 'ECT: 2g' http://localhost:8000/proxy/jsonplaceholder/posts
+curl -X POST http://localhost:8000/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"REPLACE_WITH_YOUR_PASSWORD"}'
 ```
 
-### Example
+Use the returned access token as `Authorization: Bearer ...` for administration;
+do not paste real tokens into issues, logs or committed scripts.
+
+| Route | Contract |
+| --- | --- |
+| POST `/auth/register` | JSON email/password, regular user only |
+| POST `/auth/login` | JSON email/password, access + refresh pair |
+| POST `/auth/refresh` | JSON refresh_token, rotation and reuse revocation |
+| POST `/auth/logout` | JSON refresh_token, revoke refresh token |
+| GET/HEAD/POST/PUT/PATCH/DELETE `/proxy/{service}/{path}` | Configured upstream; credentials optional, invalid supplied credentials rejected |
+| GET `/admin/config`, `/admin/stats`, `/admin/diagnostics`, `/admin/queue` | Administrator JWT required |
+| POST `/admin/reload-config` | Validate and reload YAML in this worker; invalid policy returns 400 |
+| POST/GET `/admin/api-keys` | Issue/list keys; raw key returned only at issuance |
+| DELETE `/admin/api-keys/{id}` | Revoke a key |
+| DELETE `/admin/cache?prefix=cache:` | Flush only the cache namespace |
+| POST `/admin/users` | Create an administrator using email/password |
+
+Access JWTs require expiry, issue time, subject and access-token type; current
+user status/role is checked in the database. Refresh tokens and API keys are
+stored as SHA-256 hashes. Password creation rejects inputs over 72 UTF-8 bytes;
+older silently truncated passwords may require a reset. Logout revokes refresh
+credentials; already issued access tokens expire normally.
+
+## Configuration
+
+Environment settings live in `gateway/config.py`; `.env.example` is a starting
+point. Lists/maps use JSON syntax. `gateway.yaml` supplies named upstreams and
+per-service rules; YAML overrides environment upstreams. An invalid file fails
+startup, and a rejected reload leaves the active policy intact.
 
 ```yaml
 upstreams:
-  my-backend: https://api.mycompany.com
-
+  backend: https://api.example.com/v1
 rules:
   _default:
-    cacheable: true
+    cacheable: false
     cache_ttl: 60
-    optional_fields: []
-
-  my-backend:
+  backend:
     cacheable: true
     cache_ttl: 120
-    optional_fields:
-      - profile_picture   # large base64 blob
-      - activity_log      # verbose array
-    upstream_timeout: 15
+    optional_fields: [large_image, meta.debug]
+    upstream_timeout: 10
+    queue_writes: false
 ```
 
-**Fields per rule:**
+| Setting | Default / meaning |
+| --- | --- |
+| `ENVIRONMENT`, `SECRET_KEY` | Development; production rejects missing/placeholder/short keys |
+| `DATABASE_URL`, `REDIS_URL` | Docker service addresses; override on the host |
+| `UPSTREAM_SERVICES` | JSON name-to-base-URL map; credentials/query/fragment in base URLs rejected |
+| `ALLOW_UNLISTED_UPSTREAMS` | false; opt-in public discovery additionally requires `UPSTREAM_DISCOVERY_DOMAINS` |
+| `TRUSTED_PROXY_NETWORKS` | `[]`; trust only exact edge-proxy CIDRs you control |
+| `ALLOWED_ORIGINS` | Explicit localhost origins; production rejects wildcard origins |
+| `RATE_LIMIT_ENABLED` | false in development; production overlay enables global limiting |
+| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | 5 / 60; authentication limits fail closed during production Redis outages |
+| `RTT_GOOD_THRESHOLD_MS` / `RTT_DEGRADED_THRESHOLD_MS` | 150 / 500 |
+| `UPSTREAM_TIMEOUT_SECONDS` | 10; wall-clock upstream deadline |
+| `MAX_REQUEST_BODY_BYTES` / `MAX_RESPONSE_BODY_BYTES` | 1 MiB / 8 MiB; buffered request / decoded response caps |
+| `REDIS_SOCKET_TIMEOUT_SECONDS` | 1; cache/classifier outages fall back safely |
+| `QUEUE_MAX_RETRIES` / `QUEUE_MAX_AGE_SECONDS` | 4 replays after the first worker attempt / 3600 seconds |
+| `GATEWAY_CONFIG_FILE` | Optional explicit YAML path; otherwise locate gateway.yaml |
+| `ADAPTATION_ENABLED` | true; false is the matched experiment control |
 
-| Field             | Type        | Default | Description |
-|-------------------|-------------|---------|-------------|
-| `cacheable`       | `bool`      | `true`  | Cache GET responses in Redis. |
-| `cache_ttl`       | `int`       | `60`    | Freshness window in seconds. |
-| `optional_fields` | `list[str]` | `[]`    | JSON keys stripped on DEGRADED / POOR connections. |
-| `upstream_timeout`| `float`     | *global*| Per-request upstream timeout (seconds). |
+Only opt-in routes with upstream-enforced idempotency and a client
+`Idempotency-Key` may queue timed-out writes. A 202 means enqueued for possible
+replay, **not committed**. Without that contract the response reports an unknown
+write outcome instead of replaying blindly. See [queue guarantees](ARCHITECTURE.md).
 
-Any upstream not listed under `rules` uses the `_default` entry.
+Caching uses exact target/query order and forwarded representation inputs;
+authenticated/cookie/conditional/range requests bypass it. Responses with cache
+control, Vary, Expires or Set-Cookie are not stored. Other anonymous successful
+GETs use the route TTL, followed by up to one day of stale retention. Review
+staleness and explicit flush requirements before enabling caching for mutable data.
 
-### Hot reload
-
-You can apply changes to `gateway.yaml` **without restarting** the gateway:
+## Quality checks and experiments
 
 ```bash
-curl -X POST http://localhost:8000/admin/reload-config \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
+python -m ruff check .
+python -m black --check .
+python -m pytest -q
+python -m unittest discover -s benchmarks -p test_run_trials.py -q
+node --test sdks/tests/*.test.js
+cd dashboard
+npm ci
+npm run lint
+npm run build
 ```
 
-If `gateway.yaml` is missing, the gateway boots with safe built-in defaults.
+Default tests use SQLite/fake Redis/mock HTTP and never truncate a development
+PostgreSQL database. CI runs Python 3.11/3.12, Ruff, Black, pytest, Compose checks,
+SDK tests and dashboard lint/build. Real PostgreSQL/Redis recovery, migrations,
+TLS and Docker operation need additional verification in a disposable stack.
 
----
+Use [the experiment methodology](docs/EXPERIMENT_METHODOLOGY.md) for the exact
+matched-control setup, raw CSVs and isolated Linux impairment topology. The
+historical `benchmarks/results/` files have unverified provenance. They are
+preserved, but do not substantiate performance claims. New results must use a
+fresh output path, with raw request records and a manifest.
 
-## Testing
+## Status and roadmap
 
-Tests live in `gateway/tests/`. `pyproject.toml` sets `pythonpath = ["gateway"]`
-and `asyncio_mode = "auto"`, so on the host you can simply run:
+[Audit](docs/PROJECT_AUDIT.md) · [Architecture](ARCHITECTURE.md) ·
+[Security](docs/SECURITY.md) · [Limitations](docs/LIMITATIONS.md) ·
+[Results template](docs/RESULTS_TEMPLATE.md) · [Contributing](CONTRIBUTING.md)
 
-```bash
-pytest
-```
+Next work: live PostgreSQL migrations and concurrent refresh tests; Redis
+crash/claim fault injection; classifier validation; cold-miss coalescing and write
+invalidation; measured experiments
+with confidence intervals and independent reproduction. The CloudFormation file
+is a host scaffold, not a one-click application deployment. Python and npm
+production advisory checks are clean as of the recorded scan;
+five high findings remain in a development-only lint dependency chain. No cloud
+resources, repository release or research publication are claimed.
 
-Inside the running stack:
-
-```bash
-docker compose exec gateway pytest tests/ -v
-```
-
-Formatting and linting (run both before committing):
-
-```bash
-black .
-ruff check .
-```
-
----
-
-## Observability
-
-The gateway exposes Prometheus metrics at `/metrics` — these *are* the research
-dataset, recorded on every request:
-
-| Metric                                                            | Type      | Labels |
-|-------------------------------------------------------------------|-----------|--------|
-| `gateway_requests_total`                                          | counter   | `method`, `route`, `network_quality`, `cache_hit` |
-| `gateway_network_quality_total`                                   | counter   | `quality` |
-| `gateway_response_size_bytes`                                     | histogram | `network_quality`, `stage` (`original` / `optimized`) |
-| `gateway_upstream_latency_seconds`                                | histogram | `upstream` |
-| `gateway_queue_depth`                                             | gauge     | — |
-| `gateway_cache_hit_rate`                                          | gauge     | — |
-| `gateway_cache_events_total`                                      | counter   | `result` (`hit` / `miss` / `stale`) |
-
-Prometheus scrapes the gateway (see `prometheus/prometheus.yml`), and Grafana
-**auto-provisions** its datasource and the Adaptive Gateway dashboard from
-`grafana/provisioning/` and `grafana/dashboards/adaptive-gateway.json` — no
-manual setup. Open Grafana at http://localhost:3000 (`admin` / `admin`).
-
----
-
-## Research experiment
-
-The Week 7 experiment runner is `benchmarks/run_experiment.py` (the
-`AGW-BENCH` deliverable). It is an async load generator that drives the gateway
-— and optionally a plain-FastAPI baseline — under simulated network conditions
-and records success rate, p50/p95/p99 latency, error rate, and mean response
-size to CSV (with optional matplotlib charts and S3 upload).
-
-Methodology:
-
-- Network impairment is applied on a **real** interface with `tc netem`
-  (`delay`/`loss`/`rate`), since netem does not work on loopback. `GOOD` is a clean
-  link, `DEGRADED` is `200ms / 1% loss / 1mbit`, `POOR` is `1000ms / 5% loss /
-  256kbit`. The `rate` caps make the payload-size reduction (the core result)
-  visible — under pure added delay a smaller body barely changes transfer time.
-- The tier is pinned deterministically via `X-Client-RTT` / `ECT` client hints
-  so classification does not depend on noisy measured RTT — keeping runs
-  reproducible.
-
-```bash
-# Pure load test (no root, no netem), against a running gateway
-python benchmarks/run_experiment.py --no-netem
-
-# Full experiment on EC2 with netem, comparing against a baseline
-sudo python benchmarks/run_experiment.py \
-  --target http://localhost:8000 --baseline http://localhost:9000 \
-  --interface eth0 --requests 1000 --concurrency 20 \
-  --charts --s3-bucket joel-adaptive-gateway-research
-```
-
-Results are written under `benchmarks/results/` and summarised as an
-adaptive-vs-baseline improvement table.
-
-### Multiple trials (mean ± stddev)
-
-A single run is noisy — latency percentiles and success rates wobble between
-runs under `netem` loss. For paper-grade numbers, `benchmarks/run_trials.py`
-wraps `run_experiment.py` and runs it several times, then aggregates the
-per-run CSVs to **mean ± sample standard deviation** per
-`(condition, system, metric)`. It shells out to `run_experiment.py` (the single
-source of truth for the experiment and `netem` logic) and forwards every flag
-verbatim **except** `--out` (it owns one per trial) and `--charts` (skipped).
-
-```bash
-# 5 trials (default), pure load test, no netem
-python benchmarks/run_trials.py --no-netem
-
-# 10 trials with netem against a baseline; extra flags pass through unchanged
-sudo python benchmarks/run_trials.py --trials 10 \
-  --target http://localhost:8000 --baseline http://localhost:9000 \
-  --interface eth0 --requests 1000 --concurrency 20
-```
-
-Own flags: `--trials` (default 5), `--runner` (path to `run_experiment.py`),
-`--results-dir`. Each trial is written to `benchmarks/results/runs/run_NN.csv`,
-and the aggregate lands in `benchmarks/results/aggregate.csv` in long format
-(`condition, system, metric, mean, stddev, trials`). The wrapper also prints a
-summary table and an adaptive-vs-baseline improvement table computed on the
-trial means. It is standard-library only (`csv`, `statistics`, `subprocess`);
-sample stddev uses `n-1` and is `0.0` for a single trial.
-
-The wrapper has a local unit test (no gateway stack required) that mocks the
-subprocess call:
-
-```bash
-python benchmarks/test_run_trials.py
-```
-
----
-
-## Project structure
-
-```
-adaptive-gateway/
-├── ARCHITECTURE.md                 ← project architecture
-├── README.md                       ← you are here
-├── gateway.yaml                    ← route rules + upstream config (edit this!)
-├── gateway.yaml.example            ← commented example — copy to gateway.yaml
-├── docker-compose.yml              ← local dev (all services)
-├── .env.example                    ← copy to .env
-├── pyproject.toml                  ← black / ruff / pytest config (pythonpath=gateway)
-├── requirements.txt
-├── gateway/                        ← FastAPI app == import root
-│   ├── Dockerfile
-│   ├── main.py                     ← app + middleware registration, /health
-│   ├── config.py                   ← settings + YAML route-rule loader
-│   ├── alembic.ini
-│   ├── middleware/
-│   │   ├── network_detector.py     ← tier classification (RTT / ECT / Save-Data / EWMA)
-│   │   ├── auth.py                 ← JWT / API-key identity
-│   │   ├── response_optimizer.py   ← strip fields, gzip, 206 skeleton
-│   │   └── rate_limit.py
-│   ├── routes/
-│   │   ├── auth.py                 ← register / login / refresh / logout
-│   │   ├── proxy.py                ← reverse proxy + stale-while-revalidate
-│   │   └── admin.py                ← /admin/* introspection + management
-│   ├── auth/
-│   │   ├── security.py             ← JWT, bcrypt, token/API-key hashing
-│   │   └── dependencies.py         ← require_principal / require_admin
-│   ├── cache/
-│   │   └── redis_client.py         ← pooled Redis + SWR cache
-│   ├── offline_queue/              ← named to avoid shadowing stdlib `queue`
-│   │   └── sync_worker.py          ← Redis-Stream write queue + replay
-│   ├── models/
-│   │   ├── db.py                   ← async engine + ORM (User, RefreshToken, APIKey, RequestLog, FailedRequest)
-│   │   └── schemas.py              ← Pydantic request/response contracts
-│   ├── utils/
-│   │   └── metrics.py              ← Prometheus collectors + helpers
-│   ├── migrations/                 ← Alembic
-│   └── tests/                      ← pytest suite
-├── nginx/                          ← nginx.conf, nginx.prod.conf
-├── prometheus/                     ← prometheus.yml scrape config
-├── grafana/                        ← auto-provisioned datasource + dashboard
-├── benchmarks/                     ← run_experiment.py, run_trials.py + results/
-└── tasks/                          ← todo.md, lessons.md
-```
-
-> The queue package is intentionally named `offline_queue` (not `queue`) to
-> avoid shadowing Python's standard-library `queue` module.
-
----
-
-## Roadmap
-
-- [ ] Harden the offline write-queue replay path and dead-letter analytics
-- [ ] Persist the per-client RTT EWMA across worker processes (currently
-      in-process, single-worker)
-- [ ] Production TLS via Certbot / Let's Encrypt and `docker-compose.prod.yml`
-- [ ] Expand `ROUTE_RULES` coverage and add a config-driven optional-fields UI
-- [ ] Run the full `tc netem` experiment on EC2 and export figures for the paper
-- [ ] Submit to ACM COMPASS (target window: November–January)
-
----
-
-## License
-
-MIT.
+Project code is [MIT licensed](LICENSE). Dependencies and container images retain
+their respective licenses; no blanket third-party license audit is claimed.

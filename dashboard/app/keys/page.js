@@ -1,88 +1,44 @@
 'use client';
-
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { fetchWithAuth } from '../../lib/api';
-
 export default function KeysPage() {
-  const [keys, setKeys] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [copiedKey, setCopiedKey] = useState(null);
-
-  useEffect(() => {
-    loadKeys();
-  }, []);
-
-  const loadKeys = async () => {
-    try {
-      const res = await fetchWithAuth('/admin/keys');
-      if (res && res.ok) {
-        const data = await res.json();
-        setKeys(data);
-      }
-    } catch (err) {
-      console.error('Failed to load keys', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCopy = (key) => {
-    navigator.clipboard.writeText(key);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
-  };
-
-  if (loading) {
-    return <div className="text-slate-400">Loading API keys...</div>;
+  const [keys, setKeys] = useState([]);
+  const [name, setName] = useState('');
+  const [secret, setSecret] = useState('');
+  const [message, setMessage] = useState('');
+  async function load() {
+    const response = await fetchWithAuth('/admin/api-keys');
+    if (!response) return;
+    if (!response.ok) throw new Error('Unable to load keys');
+    setKeys(await response.json());
   }
-
-  return (
-    <div className="max-w-4xl mx-auto">
-      <h1 className="text-3xl font-bold mb-8 text-white flex items-center">
-        <span className="mr-3">🔑</span> API Keys
-      </h1>
-
-      <div className="glass-panel p-6">
-        <h2 className="text-xl font-semibold mb-6 text-slate-200">Registered Services</h2>
-        
-        {Object.keys(keys).length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-700 text-slate-400 text-sm">
-                  <th className="py-3 px-4 font-medium">Service Name</th>
-                  <th className="py-3 px-4 font-medium">API Key</th>
-                  <th className="py-3 px-4 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-700/50">
-                {Object.entries(keys).map(([service, key]) => (
-                  <tr key={service} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-4 px-4 font-medium text-blue-300">{service}</td>
-                    <td className="py-4 px-4 font-mono text-sm text-slate-300">
-                      {key.substring(0, 8)}••••••••••••••••
-                    </td>
-                    <td className="py-4 px-4">
-                      <button 
-                        onClick={() => handleCopy(key)}
-                        className={`text-sm px-3 py-1.5 rounded transition-all ${
-                          copiedKey === key 
-                            ? 'bg-green-500/20 text-green-300 border border-green-500/50' 
-                            : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-600/50'
-                        }`}
-                      >
-                        {copiedKey === key ? 'Copied!' : 'Copy Key'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-slate-400">No API keys registered.</p>
-        )}
-      </div>
-    </div>
-  );
+  useEffect(() => { Promise.resolve().then(load).catch(err => setMessage(err.message)); }, []);
+  async function issue(event) {
+    event.preventDefault(); setSecret('');
+    try {
+      const response = await fetchWithAuth('/admin/api-keys', { method: 'POST', body: JSON.stringify({ name }) });
+      if (!response) return;
+      if (!response.ok) throw new Error('Unable to issue key');
+      setSecret((await response.json()).api_key); setName(''); await load();
+    } catch (err) { setMessage(err.message); }
+  }
+  async function revoke(id) {
+    try {
+      const response = await fetchWithAuth(`/admin/api-keys/${id}`, { method: 'DELETE' });
+      if (!response) return;
+      if (!response.ok) throw new Error('Unable to revoke key');
+      await load();
+    } catch (err) { setMessage(err.message); }
+  }
+  return <div><h1 className="text-3xl font-bold mb-8">API Keys</h1><p role="status">{message}</p>
+    <form className="glass-panel p-6 mb-6" onSubmit={issue}>
+      <label htmlFor="key-name">Key name</label><input id="key-name" className="input-glass mx-3" required maxLength={128} value={name} onChange={e => setName(e.target.value)} />
+      <button className="btn-primary" type="submit">Issue key</button>
+    </form>
+    {secret && <div className="glass-panel p-6 mb-6"><p>Copy this key now. It is shown only once.</p><code className="break-all">{secret}</code><button className="btn-secondary ml-3" onClick={() => setSecret('')}>Dismiss</button></div>}
+    <div className="glass-panel p-6">{keys.map(key => <div className="mb-4" key={key.id}>
+      <span>{key.name}: agw_{key.prefix}_•••• ({key.is_active ? 'Active' : 'Revoked'})</span>
+      {key.is_active && <button className="btn-secondary ml-3" onClick={() => revoke(key.id)}>Revoke</button>}
+    </div>)}{keys.length === 0 && <p>No API keys issued.</p>}</div>
+  </div>;
 }

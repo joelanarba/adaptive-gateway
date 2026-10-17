@@ -18,7 +18,7 @@ export default function LoginPage() {
       await login(username, password);
       router.push('/');
     } catch (err) {
-      setError('Invalid username or password');
+      setError('Unable to sign in. Check credentials and administrator access.');
     }
   };
 
@@ -42,14 +42,14 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Username</label>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Email</label>
               <input
-                type="text"
+                type="email"
                 required
                 className="input-glass w-full"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="admin"
+                placeholder="admin@example.com"
               />
             </div>
             
@@ -61,7 +61,7 @@ export default function LoginPage() {
                 className="input-glass w-full"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
               />
             </div>
 

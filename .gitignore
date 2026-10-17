@@ -17,6 +17,7 @@ venv.bak/
 # Environment / secrets
 .env
 .env.*
+!.env.example
 secrets.env
 *.pem
 *.key
@@ -26,6 +27,11 @@ aws_credentials
 .pytest_cache/
 .mypy_cache/
 .cache/
+.ruff_cache/
+.test-cache/
+.tmp/
+certbot/
+dashboard/.next/
 
 # VSCode
 .vscode/

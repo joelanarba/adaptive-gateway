@@ -75,8 +75,8 @@ class RequestLogWriter:
                 batch = await self._collect_batch()
                 if batch:
                     await self._flush(batch)
-            except Exception as exc:  # noqa: BLE001 - the writer must never die
-                log.warning("request_log_writer.loop_error", error=str(exc))
+            except Exception:  # noqa: BLE001 - the writer must never die
+                log.warning("request_log_writer.loop_error")
         log.info("request_log_writer.stopped")
 
     async def _collect_batch(self) -> list[dict]:
@@ -110,10 +110,9 @@ class RequestLogWriter:
             async with AsyncSessionLocal() as session:
                 session.add_all([RequestLog(**r) for r in records])
                 await session.commit()
-        except Exception as exc:  # noqa: BLE001 - logging must never crash the writer
-            log.warning(
-                "request_log_writer.flush_failed", count=len(records), error=str(exc)
-            )
+        except Exception:  # noqa: BLE001 - logging must never crash the writer
+            gateway_request_log_dropped_total.inc(len(records))
+            log.warning("request_log_writer.flush_failed", count=len(records))
 
 
 # Module-level singleton (mirrors offline_queue.enqueue_write). The app lifespan

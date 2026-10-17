@@ -1,0 +1,10 @@
+upstreams:
+  fixture: http://127.0.0.1:9100
+rules:
+  _default:
+    cacheable: false
+    cache_ttl: 60
+  fixture:
+    cacheable: false
+    cache_ttl: 60
+    optional_fields: [body, meta.debug]

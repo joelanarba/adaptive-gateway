@@ -6,7 +6,7 @@
  */
 
 const DEFAULT_OPTIONS = {
-  rttDegradedThresholdMs: 500,
+  rttDegradedThresholdMs: 150,
   stripFields: [], // Array of dot-notation paths (e.g., ['data.largeImage', 'comments'])
   simulateDegraded: false, // For testing
 };
@@ -16,21 +16,16 @@ const DEFAULT_OPTIONS = {
  */
 function deleteNestedPath(obj, path) {
   if (!obj || typeof obj !== 'object') return;
-  
   const keys = path.split('.');
-  let current = obj;
-  
-  for (let i = 0; i < keys.length - 1; i++) {
-    const key = keys[i];
-    if (current[key] && typeof current[key] === 'object') {
-      current = current[key];
-    } else {
-      return; // Path doesn't exist
-    }
+  if (keys.some(key => ['__proto__', 'prototype', 'constructor'].includes(key))) return;
+  if (Array.isArray(obj)) {
+    obj.forEach(item => deleteNestedPath(item, path));
+    return;
   }
-  
-  const finalKey = keys[keys.length - 1];
-  delete current[finalKey];
+  const [head, ...tail] = keys;
+  if (!Object.prototype.hasOwnProperty.call(obj, head)) return;
+  if (tail.length) deleteNestedPath(obj[head], tail.join('.'));
+  else delete obj[head];
 }
 
 /**
@@ -71,17 +66,17 @@ function adaptiveGateway(options = {}) {
     let isDegraded = config.simulateDegraded;
 
     if (!isDegraded) {
-      const ect = req.get('ECT');
+      const ect = (req.get('ECT') || '').trim().toLowerCase();
       const rttRaw = req.get('X-Client-RTT');
-      const saveData = req.get('Save-Data');
+      const saveData = (req.get('Save-Data') || '').trim().toLowerCase();
 
-      if (saveData === 'on' || ect === '2g' || ect === 'slow-2g') {
-        isDegraded = true;
-      } else if (rttRaw) {
-        const rtt = parseInt(rttRaw, 10);
-        if (!isNaN(rtt) && rtt >= config.rttDegradedThresholdMs) {
-          isDegraded = true;
-        }
+      const rtt = rttRaw && rttRaw.trim() ? Number(rttRaw) : NaN;
+      if (Number.isFinite(rtt) && rtt >= 0) {
+        isDegraded = rtt >= config.rttDegradedThresholdMs;
+      } else if (['4g', '3g', '2g', 'slow-2g'].includes(ect)) {
+        isDegraded = ect !== '4g';
+      } else {
+        isDegraded = saveData === 'on';
       }
     }
 

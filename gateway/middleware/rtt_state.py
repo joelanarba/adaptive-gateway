@@ -18,6 +18,7 @@ just the latest sample (handy for testing the dwell logic with crisp values).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 GOOD = "GOOD"
@@ -82,6 +83,8 @@ def advance(state: RttState, sample_ms: float, t: Thresholds) -> RttState:
     Updates the EWMA, derives the candidate tier from it, and commits a tier
     transition only after ``transition_samples`` consecutive agreeing samples.
     """
+    if not math.isfinite(sample_ms) or sample_ms < 0:
+        return state
     ewma = (
         sample_ms
         if state.ewma is None

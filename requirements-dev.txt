@@ -1,0 +1,8 @@
+-r requirements.txt
+pytest==9.1.1
+pytest-asyncio==1.4.0
+black==26.10.1
+ruff==0.3.7
+# In-process substitutes: never truncate development datastores.
+aiosqlite==0.20.0
+fakeredis[lua]==2.31.1

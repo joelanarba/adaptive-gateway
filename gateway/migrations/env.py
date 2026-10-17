@@ -29,7 +29,7 @@ from models.db import Base
 config = context.config
 
 # Inject the application's async database URL at runtime.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging (loggers/handlers/formatters).
 if config.config_file_name is not None:

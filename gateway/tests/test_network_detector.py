@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -59,7 +60,7 @@ async def test_passive_tier_read_from_shared_redis_state(client):
     # shared across workers, not an in-process dict. Seed it as a prior worker
     # would have, then a hint-less request must reflect it.
     await get_redis().set(
-        "netq:9.9.9.9",
+        "netq:127.0.0.1",
         json.dumps(
             {
                 "ewma": 300.0,
@@ -69,9 +70,7 @@ async def test_passive_tier_read_from_shared_redis_state(client):
             }
         ),
     )
-    resp = await client.get(
-        "/proxy/does-not-exist/x", headers={"X-Forwarded-For": "9.9.9.9"}
-    )
+    resp = await client.get("/proxy/does-not-exist/x")
     assert resp.headers["X-Network-Quality"] == "DEGRADED"
 
 
@@ -84,4 +83,15 @@ async def test_explicit_hint_does_not_write_passive_state(client):
         headers={"X-Client-RTT": "800", "X-Forwarded-For": "8.8.8.8"},
     )
     assert resp.headers["X-Network-Quality"] == "POOR"
-    assert await get_redis().get("netq:8.8.8.8") is None
+    assert await get_redis().keys("netq:*") == []
+
+
+async def test_concurrent_samples_do_not_overwrite_newer_shared_state(monkeypatch):
+    from config import settings
+    from middleware.network_detector import _load_state, _update_state
+
+    monkeypatch.setattr(settings, "rtt_ewma_alpha", 1.0)
+    await asyncio.gather(*(_update_state("concurrent", 800) for _ in range(3)))
+    state = await _load_state("concurrent")
+    assert state.tier == "POOR"
+    assert state.ewma == 800

@@ -7,7 +7,7 @@ so that
 
     python benchmarks/run_experiment.py --baseline http://localhost:9000
 
-measures the gateway's adaptation logic as the *only* independent variable.
+compares whole-system behavior; use a matched gateway control to isolate adaptation.
 
 Upstreams are read from the same ``UPSTREAM_SERVICES`` JSON env map the gateway
 uses, so both systems proxy to identical backends.
@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request, Response
 
-# Hop-by-hop headers must not be forwarded (RFC 7230 §6.1) — same set the
+# Hop-by-hop headers must not be forwarded (RFC 7230 Â§6.1) â€” same set the
 # gateway strips, so the only difference between systems is the adaptation.
 HOP_BY_HOP = {
     "connection",
@@ -60,7 +60,8 @@ async def lifespan(app: FastAPI):
     # One pooled client for all upstream calls (mirrors the gateway's pooling so
     # connection-reuse is not a confounding difference).
     app.state.http_client = httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
+        trust_env=False,
         timeout=10.0,
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
@@ -106,7 +107,7 @@ async def proxy(service: str, path: str, request: Request) -> Response:
             request.method, target, headers=fwd_headers, content=body
         )
     except httpx.HTTPError as exc:
-        # No cache fallback, no queue — a plain proxy just fails. That contrast
+        # No cache fallback, no queue â€” a plain proxy just fails. That contrast
         # with the gateway is exactly what the experiment is meant to surface.
         return Response(
             content=f'{{"detail":"upstream error: {exc.__class__.__name__}"}}',

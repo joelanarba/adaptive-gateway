@@ -73,3 +73,29 @@ async def test_api_key_create_and_list(client, admin_headers):
     assert r.status_code == 200
     names = [k["name"] for k in r.json()]
     assert "ci-bot" in names
+
+
+async def test_api_key_revocation_and_role_changes_apply_immediately(
+    client, admin_headers, mock_upstream
+):
+    response = await client.post(
+        "/admin/api-keys", json={"name": "revocable"}, headers=admin_headers
+    )
+    key = response.json()
+    headers = {"X-API-Key": key["api_key"], "ECT": "4g"}
+    response = await client.get("/proxy/mock/x", headers=headers)
+    assert (
+        response.status_code == 200 and response.headers["X-Cache-Status"] == "BYPASS"
+    )
+    assert (await client.get("/admin/config", headers=headers)).status_code == 403
+    response = await client.delete(
+        f"/admin/api-keys/{key['id']}", headers=admin_headers
+    )
+    assert response.status_code == 204
+    assert (await client.get("/proxy/mock/x", headers=headers)).status_code == 401
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            update(User).where(User.email == ADMIN["email"]).values(is_admin=False)
+        )
+        await session.commit()
+    assert (await client.get("/admin/config", headers=admin_headers)).status_code == 403

@@ -16,15 +16,18 @@ Attaches to ``request.state``:
 
 from __future__ import annotations
 
+import uuid
+
 import structlog
-from jose import JWTError
+from jwt import PyJWTError as JWTError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from auth.security import decode_access_token, hash_token
-from models.db import APIKey, AsyncSessionLocal
+from models.db import APIKey, AsyncSessionLocal, User
 
 log = structlog.get_logger()
 
@@ -41,7 +44,9 @@ _PUBLIC_PREFIXES = (
 
 
 def _is_public(path: str) -> bool:
-    return path == "/" or path.startswith(_PUBLIC_PREFIXES)
+    return path == "/" or any(
+        path == prefix or path.startswith(prefix + "/") for prefix in _PUBLIC_PREFIXES
+    )
 
 
 def _unauthorized(detail: str) -> JSONResponse:
@@ -71,18 +76,39 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 payload = decode_access_token(token)
             except JWTError:
                 return _unauthorized("invalid or expired token")
+            try:
+                user_id = uuid.UUID(payload["sub"])
+            except (ValueError, TypeError, KeyError):
+                return _unauthorized("invalid token subject")
+            try:
+                async with AsyncSessionLocal() as session:
+                    user = await session.get(User, user_id)
+            except SQLAlchemyError:
+                return JSONResponse(
+                    {"detail": "authentication unavailable"}, status_code=503
+                )
+            if user is None or not user.is_active:
+                return _unauthorized("invalid or disabled account")
             request.state.authenticated = True
-            request.state.user_id = payload.get("sub")
-            request.state.is_admin = bool(payload.get("is_admin", False))
+            request.state.user_id = str(user.id)
+            request.state.is_admin = user.is_admin
             request.state.auth_type = "jwt"
 
         elif api_key:
-            principal = await self._verify_api_key(api_key)
+            try:
+                principal = await self._verify_api_key(api_key)
+            except SQLAlchemyError:
+                return JSONResponse(
+                    {"detail": "authentication unavailable"}, status_code=503
+                )
             if principal is None:
                 return _unauthorized("invalid API key")
             request.state.authenticated = True
             request.state.user_id = principal
             request.state.auth_type = "api_key"
+
+        elif auth_header:
+            return _unauthorized("unsupported authorization scheme")
 
         return await call_next(request)
 
@@ -98,4 +124,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             api_key = result.scalar_one_or_none()
             if api_key is None:
                 return None
+            if api_key.user_id:
+                user = await session.get(User, api_key.user_id)
+                if user is None or not user.is_active:
+                    return None
             return str(api_key.user_id) if api_key.user_id else str(api_key.id)

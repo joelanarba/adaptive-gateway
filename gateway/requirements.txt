@@ -1,36 +1,20 @@
-# Web framework
-fastapi==0.111.0
+# Runtime dependencies shared by host and gateway image.
+fastapi==0.143.3
+starlette==1.8.0
+pydantic==2.14.1
 uvicorn[standard]==0.29.0
-
-# Async HTTP client (for proxying upstream requests)
 httpx==0.27.0
-
-# Database
 sqlalchemy[asyncio]==2.0.29
 asyncpg==0.29.0
 alembic==1.13.1
-
-# Redis
-redis[asyncio]==5.0.4
-
-# Auth
-python-jose[cryptography]==3.3.0
+redis==5.0.4
+# HS256 only: no unused JOSE/ECDSA/JWE implementation.
+PyJWT==2.15.1
 passlib[bcrypt]==1.7.4
-# Pin bcrypt: passlib 1.7.4 is incompatible with bcrypt 5.x (raises on the
-# 72-byte check). 4.1.3 ships py3.12 wheels and works with passlib.
 bcrypt==4.1.3
-python-multipart==0.0.9
-
-# Config
-pydantic-settings==2.2.1
-
-# Observability
+python-multipart==0.0.32
+email-validator==2.3.0
+pydantic-settings==2.16.0
+PyYAML==6.0.1
 prometheus-client==0.20.0
 structlog==24.1.0
-
-# Dev / test
-pytest==8.1.1
-pytest-asyncio==0.23.6
-httpx==0.27.0
-black==24.3.0
-ruff==0.3.7

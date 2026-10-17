@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Adaptive Gateway - EC2 Deployment with Docker Compose'
+Description: 'Adaptive Gateway host scaffold; requires reviewed secrets/TLS before startup'
 
 Parameters:
   InstanceType:
@@ -10,7 +10,16 @@ Parameters:
       - t3.micro
       - t3.small
       - t3.medium
-    Description: EC2 instance type (t3.micro is free-tier eligible in many regions).
+    Description: EC2 instance type. AWS resources may incur charges.
+
+  SSHLocation:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: Operator CIDR allowed to SSH; replace with your own public IP/32.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
 
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
@@ -32,19 +41,14 @@ Resources:
           CidrIp: 0.0.0.0/0
           Description: Nginx / Main proxy endpoint
         - IpProtocol: tcp
-          FromPort: 8000
-          ToPort: 8000
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
-          Description: API Gateway direct access
-        - IpProtocol: tcp
-          FromPort: 3000
-          ToPort: 3000
-          CidrIp: 0.0.0.0/0
-          Description: Next.js Admin Dashboard and Grafana
+          Description: TLS front door after operator configuration
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0
+          CidrIp: !Ref SSHLocation
           Description: SSH Access
 
   AdaptiveGatewayInstance:
@@ -55,7 +59,9 @@ Resources:
       SecurityGroups:
         - !Ref AdaptiveGatewaySecurityGroup
       # Amazon Linux 2023 AMI (x86_64) - dynamically fetched
-      ImageId: !Resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+      ImageId: !Ref LatestAmiId
+      MetadataOptions:
+        HttpTokens: required
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -83,23 +89,18 @@ Resources:
           git clone https://github.com/joelanarba/adaptive-gateway.git
           cd adaptive-gateway
           
-          # Setup dummy env files
-          cp .env.example .env
-          cp gateway.yaml.example gateway.yaml
+          # Deliberately do not copy sample credentials or start public services.
+          # The operator must configure secrets, migrations and TLS first.
           
           # Fix ownership so ec2-user can access it
           chown -R ec2-user:ec2-user /home/ec2-user/adaptive-gateway
 
-          # Start stack!
-          docker-compose up -d --build
+          # See docs/SECURITY.md before applying the production Compose overlay.
 
 Outputs:
   InstanceId:
     Description: EC2 Instance ID
     Value: !Ref AdaptiveGatewayInstance
-  DashboardURL:
-    Description: URL for the Next.js Admin Dashboard
-    Value: !Sub "http://${AdaptiveGatewayInstance.PublicDnsName}:3000"
-  APIEndpoint:
-    Description: Base URL for the Gateway API
-    Value: !Sub "http://${AdaptiveGatewayInstance.PublicDnsName}:8000"
+  Hostname:
+    Description: Host scaffold only. Configure TLS/secrets/migrations before startup.
+    Value: !GetAtt AdaptiveGatewayInstance.PublicDnsName

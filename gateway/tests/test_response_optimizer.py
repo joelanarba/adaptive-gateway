@@ -71,14 +71,16 @@ async def test_good_passes_through_unchanged(mock_upstream, client):
 
 
 @pytest.mark.asyncio
-async def test_poor_no_cache_returns_skeleton_206(mock_upstream, client):
+async def test_poor_no_cache_returns_explicit_skeleton(mock_upstream, client):
     resp = await client.get(
         "/proxy/mock/posts",
         headers={"X-Client-RTT": "900", "Accept-Encoding": "gzip"},
     )
     assert resp.headers["X-Network-Quality"] == "POOR"
-    # First call has no cache -> skeleton with 206.
-    assert resp.status_code == 206
+    # Skeleton is an application representation, not an HTTP range response.
+    assert resp.status_code == 200
+    assert resp.headers["X-Adaptive-Mode"] == "skeleton"
+    assert resp.headers["X-Response-Completeness"] == "reduced"
     payload = resp.json()
     assert len(payload) <= SKELETON_MAX_ARRAY_ITEMS
     assert all("body" not in item for item in payload)

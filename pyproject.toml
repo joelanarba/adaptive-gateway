@@ -25,9 +25,11 @@ ignore = ["B008"]
 "gateway/migrations/*" = ["E", "F", "I", "B", "UP", "W"]
 
 [tool.pytest.ini_options]
-pythonpath = ["gateway"]
+pythonpath = ["gateway", "benchmarks"]
 asyncio_mode = "auto"
-testpaths = ["gateway/tests"]
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["gateway/tests", "benchmarks"]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

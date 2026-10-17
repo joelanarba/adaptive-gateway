@@ -1,0 +1,95 @@
+{
+  "checked_utc": "2026-10-17",
+  "before_summary": {
+    "info": 0,
+    "low": 0,
+    "moderate": 1,
+    "high": 12,
+    "critical": 1,
+    "total": 14
+  },
+  "after_summary": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 5,
+    "critical": 0,
+    "total": 5
+  },
+  "after_production_summary": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "remaining": [
+    {
+      "name": "@next/eslint-plugin-next",
+      "severity": "high",
+      "is_direct": false,
+      "range": ">=14.3.0-canary.0",
+      "fix_available": {
+        "name": "eslint-config-next",
+        "version": "14.2.35",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "name": "braces",
+      "severity": "high",
+      "is_direct": false,
+      "range": "*",
+      "fix_available": {
+        "name": "eslint-config-next",
+        "version": "14.2.35",
+        "isSemVerMajor": true
+      },
+      "advisories": [
+        {
+          "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+          "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+        }
+      ]
+    },
+    {
+      "name": "eslint-config-next",
+      "severity": "high",
+      "is_direct": true,
+      "range": ">=14.3.0-canary.0",
+      "fix_available": {
+        "name": "eslint-config-next",
+        "version": "14.2.35",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "name": "fast-glob",
+      "severity": "high",
+      "is_direct": false,
+      "range": "*",
+      "fix_available": {
+        "name": "eslint-config-next",
+        "version": "14.2.35",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "name": "micromatch",
+      "severity": "high",
+      "is_direct": false,
+      "range": ">=0.2.0",
+      "fix_available": {
+        "name": "eslint-config-next",
+        "version": "14.2.35",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    }
+  ],
+  "triage": "Remaining findings form the development-only ESLint glob/braces dependency chain. npm suggests a breaking downgrade to eslint-config-next 14.2.35; that would not preserve the current Next 16 lint contract. No forced downgrade or rule removal was applied. Never run lint on untrusted attacker-controlled glob input."
+}

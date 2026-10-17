@@ -14,7 +14,9 @@ from datetime import UTC, datetime
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from auth.security import (
     access_token_ttl_seconds,
@@ -66,16 +68,24 @@ async def _issue_tokens(session: AsyncSession, user: User) -> TokenResponse:
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def register(
-    payload: RegisterRequest, db: AsyncSession = Depends(get_db)
+    payload: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> User:
+    await enforce_rate_limit(request, "register", 20, 60)
     existing = await db.execute(select(User).where(User.email == payload.email))
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="email already registered"
         )
-    user = User(email=payload.email, hashed_password=hash_password(payload.password))
+    user = User(
+        email=payload.email,
+        hashed_password=await run_in_threadpool(hash_password, payload.password),
+    )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "email already registered") from None
     await db.refresh(user)
     log.info("auth.register", user_id=str(user.id))
     return user
@@ -90,7 +100,9 @@ async def login(
     )
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    if user is None or not await run_in_threadpool(
+        verify_password, payload.password, user.hashed_password
+    ):
         # Same error for both cases — do not leak which emails exist.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials"
@@ -111,7 +123,9 @@ async def refresh(
 ) -> TokenResponse:
     token_hash = hash_token(payload.refresh_token)
     result = await db.execute(
-        select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        select(RefreshToken)
+        .where(RefreshToken.token_hash == token_hash)
+        .with_for_update()
     )
     stored = result.scalar_one_or_none()
     if stored is None:

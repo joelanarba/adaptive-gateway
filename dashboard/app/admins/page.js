@@ -18,10 +18,8 @@ export default function AdminsPage() {
       const res = await fetchWithAuth('/admin/users', {
         method: 'POST',
         body: JSON.stringify({
-          username,
-          password,
-          is_admin: true,
-          is_active: true
+          email: username,
+          password
         })
       });
 
@@ -45,7 +43,7 @@ export default function AdminsPage() {
   return (
     <div className="max-w-2xl mx-auto">
       <h1 className="text-3xl font-bold mb-8 text-white flex items-center">
-        <span className="mr-3">👥</span> Admin Management
+        <span className="mr-3">ðŸ‘¥</span> Admin Management
       </h1>
 
       <div className="glass-panel p-8">
@@ -59,14 +57,14 @@ export default function AdminsPage() {
 
         <form onSubmit={handleCreateAdmin} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Username</label>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Email</label>
             <input
-              type="text"
+              type="email"
               required
               className="input-glass w-full"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="new_admin"
+              placeholder="admin@example.com"
             />
           </div>
           
@@ -79,7 +77,7 @@ export default function AdminsPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Secure password"
-              minLength={6}
+              minLength={8}
             />
           </div>
 

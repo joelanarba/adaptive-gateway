@@ -5,13 +5,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # --- Auth ---
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
 
 
 class LoginRequest(BaseModel):
@@ -20,11 +27,11 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(min_length=1, max_length=256)
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(min_length=1, max_length=256)
 
 
 class TokenResponse(BaseModel):
@@ -67,8 +74,8 @@ class APIKeyCreated(APIKeyOut):
 # --- Admin / introspection ---
 class QueueStatus(BaseModel):
     stream_key: str
-    depth: int
-    pending: int
+    depth: int | None
+    pending: int | None
 
 
 class CacheEntryInfo(BaseModel):
