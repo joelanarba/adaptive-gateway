@@ -245,11 +245,20 @@ PostgreSQL database. CI runs Python 3.11/3.12, Ruff, Black, pytest, Compose chec
 SDK tests and dashboard lint/build. Real PostgreSQL/Redis recovery, migrations,
 TLS and Docker operation need additional verification in a disposable stack.
 
-Use [the experiment methodology](docs/EXPERIMENT_METHODOLOGY.md) for the exact
-matched-control setup, raw CSVs and isolated Linux impairment topology. The
-historical `benchmarks/results/` files have unverified provenance. They are
-preserved, but do not substantiate performance claims. New results must use a
-fresh output path, with raw request records and a manifest.
+Use [the controlled-study protocol](docs/EXPERIMENT_METHODOLOGY.md) and
+`benchmarks/run_study.py` for full, compression-only, removal-only and combined
+controls, validated raw observations, repeated seeded trials and raw-derived
+analysis. `RESPONSE_MODE` selects the operator policy; the default remains adaptive.
+The legacy CSV runners and two-process Compose experiment remain available for
+compatibility. Local tests/offline preparation need no Docker. Linux impairment
+commands are documented for later execution; no new impaired results are claimed.
+The [preliminary EC2 evidence](research/evidence/preliminary_2026-10-18/README.md)
+is preserved with [an explicit limitations audit](docs/HISTORICAL_EVIDENCE_AUDIT.md).
+Older `benchmarks/results/` files have unverified provenance. All new studies
+require a fresh directory; never overwrite or relabel historical measurements.
+
+Before publishing, use [the explicit review/staging procedure](docs/PUBLISHING.md).
+For later host collection, use [the four-mode EC2 runbook](docs/EC2_RESEARCH_RUNBOOK.md).
 
 ## Status and roadmap
 

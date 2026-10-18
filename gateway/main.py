@@ -124,6 +124,7 @@ app.add_middleware(
     expose_headers=[
         "X-Network-Quality",
         "X-Adaptive-Mode",
+        "X-Response-Mode",
         "X-Response-Completeness",
         "X-Cache-Status",
         "X-Cache-Age",
@@ -143,7 +144,14 @@ app.include_router(admin.router, prefix="/admin", tags=["admin"])
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["health"])
 async def health_check() -> dict:
     """Liveness probe used by docker-compose and load balancers."""
-    return {"status": "ok", "version": settings.version}
+    return {
+        "status": "ok",
+        "version": settings.version,
+        "response_mode": (
+            settings.response_mode if settings.adaptation_enabled else "full"
+        ),
+        "adaptation_enabled": settings.adaptation_enabled,
+    }
 
 
 @app.get("/metrics", tags=["observability"], include_in_schema=False)

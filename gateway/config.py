@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -73,6 +74,10 @@ class Settings(BaseSettings):
     service_name: str = "adaptive-gateway"
     version: str = "0.1.0"
     adaptation_enabled: bool = True
+    # Operator control for factorial experiments; never selected by a client hint.
+    response_mode: Literal["adaptive", "full", "compression", "removal", "combined"] = (
+        "adaptive"
+    )
     gateway_config_file: str | None = None
 
     # --- Datastores ---

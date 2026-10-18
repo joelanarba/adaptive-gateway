@@ -1,324 +1,232 @@
-# Experiment methodology
+# Controlled response-adaptation study
 
-Status: protocol/design and measurement code reviewed; **no performance result
-has been measured or validated in this audit**. Unit tests use synthetic outcomes
-and mock transports. Do not interpret them as network experiments. Existing CSVs
-and PNGs in `benchmarks/results/` lack sufficient provenance and are preserved as
-historical artifacts, not evidence.
+Research question: how does network-aware response adaptation affect client latency,
+body size and data completeness under constrained network conditions?
 
-## Question and hypotheses
+H1: configured optional-field removal reduces body bytes. H2: adaptation may reduce
+latency on constrained links. H3: removing data reduces completeness. H4: compression
+and field removal have distinguishable effects. These are hypotheses. Lower latency
+alone is insufficient evidence of a useful application outcome.
 
-For the same deterministic upstream workload, how do response adaptation and
-compression affect encoded response bytes, complete/partial delivery, client
-latency and server overhead under controlled connectivity constraints?
+## Evidence and implementation scope
 
-H1: omitting configured optional fields can reduce encoded body bytes.
-H2: under constrained server-to-client bandwidth, fewer bytes may reduce transfer
-time. H3: transformations add CPU cost and may reduce response completeness.
-These are hypotheses, not established benefits or findings about Ghanaian users.
-The synthetic fixture is not a representative sample of regional mobile traffic.
+The preliminary EC2 evidence in `research/evidence/preliminary_2026-10-18/` remains
+immutable. See [the historical audit](HISTORICAL_EVIDENCE_AUDIT.md) for its limitations.
+No new network-impaired experiment was executed during this local implementation.
+Unit/mock/ASGI tests establish functionality, not measured network performance.
+Older `benchmarks/results/` artifacts have separate, insufficient provenance.
 
-## Variables and baseline
+Use `benchmarks/run_study.py` for new controlled studies. `run_experiment.py` and
+`run_trials.py` retain the legacy CSV interface and rounded-summary aggregation for
+compatibility; they do not provide the new validation or four-mode analysis. Never
+merge schema-1 historical rows with schema-2 study observations or relabel a baseline
+as compression-only. The existing two-process Compose experiment is also legacy.
+No Docker is required for local tests or offline preparation.
 
-The primary independent variable is `ADAPTATION_ENABLED` on identical gateway
-instances. The matched experiment Compose file runs the same image, upstream,
-route policy and logging/auth/classification paths on ports 8001 (adaptive) and
-8002 (control). Caching is disabled on both to avoid conflating adaptation with
-cache hits. Both receive identical paths and hint/encoding headers. The fixture
-returns the same 100 records on every call, with optional text and nested debug
-fields. Save its code revision and uncompressed payload hash in the study record.
+## System and interventions
 
-Network impairment is a separate factor: GOOD, DEGRADED and POOR are experiment
-labels. RTT/ECT headers pin classification; they are not measured network quality.
-Do not infer RTT, bandwidth or loss from X-Network-Quality/X-RTT-Ms headers.
-The original `benchmarks/baseline/baseline_proxy.py` remains available as a
-whole-system conventional-proxy comparison. It lacks classifier/auth/logging/cache
-work and cannot isolate adaptation as the only independent variable.
+The detector assigns GOOD (<150 ms), DEGRADED (150 to <500 ms), or POOR (>=500 ms)
+using client RTT, ECT, Save-Data, then passive state/default. Explicit hints bypass
+classifier Redis access. Hints are experimental labels, not observed RTT or
+classifier-accuracy measurements. The proxy fetches an identity-encoded response
+from the configured upstream; the inner optimizer transforms eligible JSON 200 GETs.
+Error/control-plane/non-JSON/range/write/already-encoded/no-transform responses are
+ineligible. The full request flow is in [architecture](../ARCHITECTURE.md).
 
-Dependent variables: encoded HTTP body bytes, all-attempt client latency,
-transport/HTTP success, partial-response rate, and independently sampled server
-CPU/memory. The runner does not measure CPU, actual link RTT or link-layer bytes.
-An application-specific task-completion metric must be added before claiming
-improved usability: a small skeleton may fail a user's task.
+Set `ADAPTATION_ENABLED=true` and **operator environment** `RESPONSE_MODE` separately
+for four otherwise identical gateway processes:
 
-## Local hint-only reproduction
+| RESPONSE_MODE | Remove body, meta.debug | Allow gzip | Items in fixture |
+| --- | --- | --- | --- |
+| full | no | no | 100 |
+| compression | no | yes | 100 |
+| removal | yes | no | 100 |
+| combined | yes | yes | 100 |
 
-Prerequisites: Docker daemon; Compose 2.24.4+; Python 3.11/3.12 virtual environment
-with `requirements-dev.txt`. All commands run from the repository root.
-The experiment Compose project uses disposable credentials and ephemeral
-PostgreSQL/Redis state, with loopback-only published gateway ports. It does not
-contact a public upstream.
+The same client always advertises gzip. Gzip uses level 9, mtime 0, a 256-byte
+minimum, and is retained only when smaller. Fixed modes apply independently of tier;
+they isolate mechanisms, not classifier decisions. All preserve the 100-item fixture.
+A fifth `--mode adaptive=URL` evaluates the deployed policy separately: GOOD full;
+DEGRADED strips and may gzip; uncached POOR additionally truncates arrays to ten.
+The study requires an uncached fixture. It does not evaluate stale-cache behavior.
+`ADAPTATION_ENABLED=false` remains a legacy full-response override.
 
-```bash
-docker compose -p agw-experiment -f docker-compose.experiment.yml config --quiet
-docker compose -p agw-experiment -f docker-compose.experiment.yml up --build -d
-curl http://localhost:8001/health
-curl http://localhost:8002/health
-python benchmarks/run_trials.py --trials 5 --no-netem \
-  --target http://localhost:8001 --baseline http://localhost:8002 \
-  --path /proxy/fixture/items --requests 1000 --concurrency 20 --timeout 15 \
-  --results-dir benchmarks/results/study-001
+Eligible responses explicitly return `X-Response-Mode`, `X-Adaptive-Mode`
+(none/stripped/skeleton), and `X-Response-Completeness` (full/reduced). Compression-only
+is full content and has adaptation marker none; actual compression is identified
+by Content-Encoding and verified bytes. Missing markers are an experimental
+validation failure. Eligible requests that explicitly forbid identity receive 406
+when their selected mode cannot produce an acceptable gzip representation. This
+is distinct from the normal study request, which permits gzip and identity.
+Ineligible responses carry no assurance from these markers.
+
+## Fixture and fairness
+
+`benchmarks/fixture/contract.py` defines version optional-heavy-items-v1, its canonical
+SHA-256, all 100 exact expected records, required leaf fields id/title/meta.category,
+and optional body/meta.debug. The fixture imports the same definition. A full body
+has 300 required and 200 optional field cells. A fixed removal response has 300
+required cells, no optional cells, all items, and field coverage 0.6. This is a
+structural coverage score with equal leaf weights, not semantic utility. A ten-item
+skeleton has item retention 0.1 and coverage 0.06; correct required values in returned
+items do not imply that all required information from the full response survived.
+
+Match gateway code, Python/dependencies, YAML, workers (one), datastores/logging,
+fixture/path, client hints, timeout, concurrency, request count, gzip acceptance and
+warm-up. Disable cache, edge compression and retries; use the committed host YAML
+with UPSTREAM_SERVICES={} to prevent environment overrides. The runner validates
+that the supplied YAML disables fixture caching and removes exactly the known
+optional fields. Every validated response must also report X-Cache-Status: BYPASS.
+HIT/MISS/STALE or missing cache metadata invalidate the controlled observation.
+The file hash records intended policy, not proof that each server
+loaded it. Inspect servers and attest their revision; never dump environment secrets.
+
+Only the response mode varies. Trials have a seeded initial mode shuffle followed
+by rotation, balancing starting positions over multiples of the number of modes.
+This is not full randomization of all permutations or proof of independent trials.
+Use eight or more four-mode trials as an initial design, then justify sample size
+from observed variability. Adding adaptive makes a five-mode schedule; prefer ten
+trials. Seeds control ordering, not HTTP scheduling or external loss randomness.
+Repeat across days/host allocations and rotate mode-to-port/process assignments in
+separate studies to investigate host/order confounding. Record those decisions.
+
+Run one condition per study directory. Impairment must remain constant through all
+mode blocks/trials. Randomize condition order across separately recorded sessions;
+GOOD is a clean link, DEGRADED and POOR need verified external impairment. A condition
+flag alone sends hints and does **not** impair a network. The manifest labels this
+honestly with impairment.kind=none when appropriate.
+
+## Measurements and artifacts
+
+Each new directory is reserved exclusively, including against an existing empty
+directory. No resume or overwrite is supported. A prepared plan cannot become a
+collection destination; collection needs another new directory. Interrupted runs
+retain raw blocks and an aborted manifest; a forcibly killed process can leave a
+running/collected manifest or incomplete final block, which the analyzer refuses.
+The collected state means raw receipt ended but final analysis has not finished;
+only complete/invalid_responses states are accepted for public reanalysis.
+
+- `requests.jsonl`: schema 2, trial/system/mode/condition, stable submission request
+  ID and warmup/measured phase, UTC start, perf-counter latency ms, HTTP status,
+  transport completion, HTTP success, timeout and exception class; encoded bytes,
+  decoded bytes and SHA-256 digests; Content-Encoding/Type, network/mode/adaptation/
+  completeness/cache-status headers; encoding/JSON/fixture/mode/metadata validity, validation
+  time/error category, item count/retention, required/optional totals and counts by
+  field, required-value preservation, reduced flag, field coverage, valid_response.
+- Encoded size uses [HTTPX aiter_raw](https://www.python-httpx.org/async/#streaming-responses),
+  before content decoding. Identity and [gzip](https://docs.python.org/3.12/library/gzip.html)
+  are supported, with gzip integrity/truncation and 8 MiB expansion checks. Unsupported
+  encodings, unlabelled gzip, invalid JSON and altered fixture values are flagged.
+  Partially received bytes and status survive failures. Unmeasurable decoded/content
+  quantities are null. Body sizes exclude HTTP headers, TLS, TCP/IP and retransmission.
+- Latency runs from worker submission to full encoded-body receipt or failure,
+  excluding waiting for a worker and local validation. HTTPX timeout is per I/O
+  operation, not a hard total deadline. No retries/redirects/environment proxies;
+  an empty Cookie header prevents server cookies changing subsequent requests.
+  Each block gets a new pooled client; warm-up uses that pool, is stored, and is
+  excluded from analysis. Validation occurs between submissions and can influence
+  offered load/client CPU; validation_ms records it. This is a closed-loop latency
+  study, not an open-loop throughput or coordinated-omission-corrected benchmark.
+- `manifest.json`: lifecycle/start/end, runner revision, dirty flag, source file and
+  tracked-diff hashes, intended YAML hash/public settings, optional operator-attested
+  server revision, Python/kernel/architecture/CPU count and selected package versions,
+  fixture hash/contract, full schedule/seed, workload settings, hints, declared
+  impairment and measurement definitions. No environment dump, credentials, hostname
+  or local home path. Bare target origins are retained for topology reproduction;
+  review private addresses before public release. External impairment and server
+  revision are explicitly not independently verified by the runner.
+- `analysis.json`: per-trial metrics derived directly from unrounded raw rows,
+  per-mode mean/sample standard deviation/range across trials, and paired contrasts.
+  Requests/HTTP errors/timeouts and valid-body counts are explicit. All-attempt and
+  HTTP-success-only nearest-rank P50/P95 use ceil(p*n/100), no interpolation. For
+  even N, P50 is the lower central order statistic, not the average of the middle two.
+  Failures remain in all-attempt latency; fast errors can lower it. Timeouts are
+  observed failure durations, not estimates of eventual completion time.
+- Encoded all-attempt means include failed/error/partial bodies; content/body means
+  and completeness rates ending in _valid use only validated responses and expose
+  their denominator. Do not conceal exclusion rates. Empty valid sets produce null,
+  never zero-size full bodies. A mean of trial P95s differs from pooled-request P95.
+  Sample spread is null for a single trial, not zero uncertainty.
+- Five paired treatment-minus-reference contrasts isolate compression at both field
+  levels, removal at both compression levels, and combined vs full. Output preserves
+  every paired trial ID and difference, its mean, sample stddev and observed range, in raw
+  units. Fewer contributing pairs are reported, not silently imputed.
+
+Exit 2 means at least one complete 2xx (including warm-up) failed experimental
+validation; artifacts are retained and must be inspected before interpretation.
+HTTP errors/timeouts remain outcomes and do not alone cause exit 2 in a normal
+study. With --require-all-valid, any failed/invalid attempt including warm-up makes
+the smoke gate fail with exit 2. This flag and its failure count are in the manifest. Exit 0 means
+collection completed, not that the service was healthy or H1-H4 were supported.
+The analyzer verifies raw SHA-256, unique IDs, types/finite values, consistent HTTP
+outcomes and the exact manifest schedule/counts. It never reads a saved summary as
+an input. Raw rows support independent numerical reanalysis; response bodies are
+hashed rather than archived, so repeating content-validation with a different
+validator requires a new run or separately consented body capture.
+
+Collection retains at most one block of compact observations and one bounded body
+per worker; it never accumulates response bodies across requests. CLI finalization
+and reanalysis hash/read JSONL incrementally. Exact percentiles still retain compact
+scalar measurements and identity checks proportional to request count, so analysis
+is O(N) memory rather than constant space. Capacity has not been verified; do not
+assume that larger study sizes can be analyzed within available resources.
+
+## Local Windows tests and offline preparation
+
+From the repository root in PowerShell (existing development environment):
+
+```powershell
+& .\.venv\Scripts\python.exe -m pytest -q -o cache_dir=.test-cache --tb=short
+& .\.venv\Scripts\python.exe -m ruff check .
+$env:BLACK_CACHE_DIR = Join-Path $PWD '.tmp\black'
+$env:TEMP = Join-Path $PWD '.tmp'
+$env:TMP = $env:TEMP
+& .\.venv\Scripts\python.exe -m black --check . --workers 1
+$plan = 'benchmarks/results/plan-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')
+& .\.venv\Scripts\python.exe benchmarks/run_study.py --prepare-only --out $plan --condition GOOD --impairment none --trials 8 --requests 1000 --concurrency 2 --timeout 15 --warmup 10 --seed 20261018 --mode full=http://127.0.0.1:8001 --mode compression=http://127.0.0.1:8002 --mode removal=http://127.0.0.1:8003 --mode combined=http://127.0.0.1:8004
 ```
 
-Use a fresh results directory for every study. Do not replace prior raw evidence.
-These are functional/hint-only trials, not bandwidth/loss experiments. Container
-commands have been configuration-validated; actual container startup and load
-runs were **not executed** in the Windows audit environment.
-Stop the disposable project with `docker compose -p agw-experiment -f
- docker-compose.experiment.yml down` (without deleting any other project's data).
+Preparation makes no HTTP calls and needs no Docker/datastores. Review its manifest.
+For a functional local experiment, run the fixture and four gateways in five
+terminals with the same *disposable* datastore settings already configured, not
+production services. In each gateway terminal set the shared exports as PowerShell
+`$env:GATEWAY_CONFIG_FILE=(Resolve-Path benchmarks/gateway.host.yaml).Path`,
+`$env:UPSTREAM_SERVICES='{}'`, `$env:ADAPTATION_ENABLED='true'`,
+`$env:RATE_LIMIT_ENABLED='false'`, then `$env:RESPONSE_MODE='full'` (use compression,
+removal, combined in the others). Start `& .\.venv\Scripts\python.exe -m uvicorn
+main:app --app-dir gateway --host 127.0.0.1 --port 8001 --no-proxy-headers`, changing
+ports to 8002/8003/8004 respectively. Start the fixture with
+`& .\.venv\Scripts\python.exe -m uvicorn app:app --app-dir benchmarks/fixture
+--host 127.0.0.1 --port 9100`. Run the preparation command without --prepare-only,
+with a **new** output name. It remains an unimpaired functional experiment even
+with DEGRADED/POOR hints. This live local setup was not executed for this task.
 
-## Benchmark routing regression and EC2 verification
+## Later on EC2/Linux only (not executed locally)
 
-The experiment uses `/proxy/fixture/items`. The runner appends `--path` unchanged
-to each gateway base URL; `run_trials.py` forwards it to `run_experiment.py`.
-Supply base URLs such as `http://localhost:8001` and `http://localhost:8002`,
-without `/proxy` appended. Inside the gateway, `fixture` selects
-`http://fixture:9100`, and the remaining `items` path becomes
-`http://fixture:9100/items`. The fixture defines `/items`, not `/posts`.
+Use [the EC2 runbook](EC2_RESEARCH_RUNBOOK.md) after publishing the reviewed commit.
+It covers master/commit verification, existing untracked files and old services,
+shared fixture/settings, health plus body validation, a strict smoke gate, verified
+server-egress impairment on agw-link, the exact full-study command, and cleanup.
+Never modify ens5 or the primary/SSH interface. The previous two-service procedure
+does not start or verify the new four-mode study.
 
-The two reported 404 bodies have different causes in this source:
+## Interpretation and threats to validity
 
-- `/proxy/jsonplaceholder/posts` returns `unknown upstream service` before any
-  upstream call: the experiment mounts `benchmarks/gateway.yaml`, whose only
-  upstream is `fixture`, with discovery disabled. The repository-root
-  `gateway.yaml` defines `jsonplaceholder` for development and is **not** the
-  experiment configuration. `UPSTREAM_SERVICES='{}'` is only the initial env map;
-  the loader merges YAML upstreams into it at import time.
-- `/proxy/fixture/posts` matches the proxy router and forwards `/posts`; the
-  fixture's FastAPI app returns `Not Found`, which the gateway relays with
-  `X-Cache-Status: BYPASS`. A missing gateway route can also return `Not Found`,
-  so inspect the forwarded target, fixture routes and response headers instead
-  of diagnosing from the status/body alone.
+Always report absolute latency, error/timeout rates, encoded/decoded sizes and
+completeness together. Show per-trial outcomes and descriptive paired effects.
+The observed min/max is a spread, not a population uncertainty interval. No CI or
+p-value is produced: trial independence, stationarity, a sampling population and
+sample size have not been established. Prespecify and justify an interval method
+before drawing inferential claims; three historical trials cannot establish general
+benefits. The default eight trials are a starting plan, not a power calculation.
 
-The runner previously defaulted to the development JSONPlaceholder path. Its
-default now matches the experiment fixture; explicit `--path` overrides still
-work. Compose explicitly selects `/app/gateway.yaml` and enables adaptation on
-the adaptive instance; the control inherits the same settings except
-`ADAPTATION_ENABLED=false`. The gateway Dockerfile uses `./gateway` as its build
-context and `/app` as its working directory, so the root development YAML is not
-copied into that image. No proxy-route or fixture `/posts` alias is needed.
-
-Docker-free regression checks from the repository root (use the existing virtual
-environment's Python):
-
-```bash
-python -m pytest -q -p no:cacheprovider gateway/tests/test_benchmark_routing.py \
-  benchmarks/test_measurement.py benchmarks/test_run_trials.py
-python -m pytest -q -p no:cacheprovider
-```
-
-These tests use the actual gateway and fixture ASGI apps with SQLite and fake
-Redis, plus mocked load-generator transports. They do not start Uvicorn, Docker,
-PostgreSQL or a real Redis server, validate Compose through Docker, or provide
-performance evidence. Earlier 0%-success trials are invalid performance evidence;
-preserve them and use a fresh directory for corrected runs.
-
-After reviewing and pushing this change, pull that revision on EC2 and run the
-following there. **These Docker/EC2 checks have not been executed locally.**
-
-```bash
-git rev-parse HEAD
-git status --short
-docker compose -p agw-experiment -f docker-compose.experiment.yml config --quiet
-docker compose -p agw-experiment -f docker-compose.experiment.yml up --build -d
-docker compose -p agw-experiment -f docker-compose.experiment.yml ps
-docker compose -p agw-experiment -f docker-compose.experiment.yml logs --tail=50 adaptive control
-for service in adaptive control; do
-  docker compose -p agw-experiment -f docker-compose.experiment.yml exec -T "$service" \
-    python -c 'import config; print(config.__file__); print(config.get_loaded_yaml_path()); print(config.settings.upstream_services); print("adaptation:", config.settings.adaptation_enabled); print("fixture rule:", config.get_route_rule("fixture"))'
-done
-docker compose -p agw-experiment -f docker-compose.experiment.yml exec -T fixture \
-  python -c 'import app; print([r.path for r in app.app.routes])'
-```
-
-Confirm startup logs report `config_source=/app/gateway.yaml`; both container
-config checks should show `{'fixture': 'http://fixture:9100'}`, caching disabled,
-and adaptation `True` for adaptive and `False` for control. The `exec` commands
-import configuration in fresh interpreter processes; they do not inspect a
-worker's mutable Python state. Rebuild/recreate the gateways if image revision,
-mounted file, startup logs or these values disagree with the reviewed source.
-Without access to that deployment, stale images or mount overrides remain
-unverified possibilities, not established root causes.
-
-Check real HTTP delivery before collecting trials (Python stdlib only):
-
-```bash
-python - <<'PY'
-import json
-import urllib.request
-
-for port in (8001, 8002):
-    for ect in ("4g", "3g", "2g"):
-        request = urllib.request.Request(
-            f"http://localhost:{port}/proxy/fixture/items",
-            headers={"ECT": ect, "Accept-Encoding": "identity"},
-        )
-        with urllib.request.urlopen(request, timeout=15) as response:
-            payload = json.load(response)
-            reduced = port == 8001 and ect != "4g"
-            assert response.status == 200
-            assert response.headers["X-Cache-Status"] == "BYPASS"
-            assert len(payload) == (10 if port == 8001 and ect == "2g" else 100)
-            assert ("body" not in payload[0]) == reduced
-            assert ("debug" not in payload[0]["meta"]) == reduced
-            print(port, ect, response.status, len(payload), response.headers.get("X-Adaptive-Mode"))
-PY
-python benchmarks/run_trials.py --trials 1 --no-netem \
-  --target http://localhost:8001 --baseline http://localhost:8002 \
-  --path /proxy/fixture/items --requests 10 --concurrency 2 --timeout 15 \
-  --results-dir "benchmarks/results/ec2-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
-```
-
-Require 100% HTTP success for this hint-only functional smoke run on both systems
-before the larger trial protocol. Inspect raw statuses and partial rates; the
-runner records HTTP failures and does not automatically reject an all-404 run.
-This smoke test still does not establish behavior under real network impairment.
-
-## Isolated network impairment topology (Linux only)
-
-Never apply a root qdisc to a workstation, SSH, shared server or cloud interface.
-Use a dedicated disposable veth pair and client namespace, with host gateway
-processes bound only to the veth server address. This constrains API return traffic
-without impairing Redis/PostgreSQL/fixture calls. No such commands were run during
-the audit. Confirm the subnet and interface names are unused before creation.
-
-```text
-client process in agw-client namespace (10.250.0.2)
-    <---- dedicated veth ----> agw-link on server host (10.250.0.1)
-                                      | gateway:8001 / control:8002
-                                      | localhost:9100 deterministic fixture
-                                      | localhost:5432 / 6379 datastores
-```
-
-On a disposable Linux machine, create the dedicated link:
-
-```bash
-sudo ip netns add agw-client
-sudo ip link add agw-link type veth peer name agw-client-link
-sudo ip link set agw-client-link netns agw-client
-sudo ip addr add 10.250.0.1/30 dev agw-link
-sudo ip link set agw-link up
-sudo ip -n agw-client addr add 10.250.0.2/30 dev agw-client-link
-sudo ip -n agw-client link set agw-client-link up
-sudo ip -n agw-client link set lo up
-```
-
-Start only the local dev PostgreSQL/Redis services using `docker compose up -d
-postgres redis`. Configure the host datastore URLs as in README. In two host
-terminals use the same environment, with `GATEWAY_CONFIG_FILE` pointing to the
-absolute path of `benchmarks/gateway.host.yaml`:
-
-```bash
-export DATABASE_URL=postgresql+asyncpg://gateway:gateway@localhost:5432/gateway
-export REDIS_URL=redis://localhost:6379
-export GATEWAY_CONFIG_FILE="$PWD/benchmarks/gateway.host.yaml"
-# Terminal 1:
-ADAPTATION_ENABLED=true python -m uvicorn main:app --app-dir gateway \
-  --host 10.250.0.1 --port 8001 --no-proxy-headers
-# Terminal 2 (repeat the exports there):
-ADAPTATION_ENABLED=false python -m uvicorn main:app --app-dir gateway \
-  --host 10.250.0.1 --port 8002 --no-proxy-headers
-# Terminal 3: fixture, no outside traffic
-python -m uvicorn app:app --app-dir benchmarks/fixture --host 127.0.0.1 --port 9100
-```
-
-Apply impairment to **server egress on agw-link**, then run clients inside the
-namespace. Commands below show DEGRADED; record `tc -s qdisc show dev agw-link`
-and interface packet counters before/after to verify bytes traverse that link.
-The `add` operation must fail if an existing qdisc prevents safe installation;
-never replace a pre-existing root qdisc automatically.
-
-```bash
-sudo tc qdisc add dev agw-link root handle 1a00: netem delay 200ms loss 1% rate 1mbit
-sudo tc -s qdisc show dev agw-link
-sudo ip netns exec agw-client "$PWD/.venv/bin/python" benchmarks/run_trials.py \
-  --trials 5 --no-netem --conditions DEGRADED \
-  --impairment-label 'external-netem:server-egress:200ms:1pct:1mbit' \
-  --target http://10.250.0.1:8001 --baseline http://10.250.0.1:8002 \
-  --path /proxy/fixture/items --requests 1000 --concurrency 20 --timeout 15 \
-  --results-dir benchmarks/results/impaired-degraded-001
-sudo tc qdisc del dev agw-link root handle 1a00:
-```
-
-GOOD: no experiment qdisc. POOR: `delay 1000ms loss 5% rate 256kbit`, with
-`--conditions POOR`, a corresponding impairment label and a new results directory.
-Netem delay is configured **one-way egress delay**, not measured round-trip time;
-the deterministic hint values (50/250/800 ms) need not equal measured RTT.
-Record actual ping/transport observations separately. `--impairment-label` is
-metadata supplied by the operator; it does not apply or verify impairment.
-
-Cleanup only the explicitly created namespace/link after stopping those host
-processes: `sudo ip netns del agw-client`; `sudo ip link del agw-link` if the host
-end still exists. Confirm targets before removal. Do not use these names for
-unrelated infrastructure. An alternative `--netem --interface agw-*` runner mode
-manages its own qdisc on a dedicated interface in the **runner's namespace**;
-this is useful only when that topology truly carries the measured traffic.
-It aborts on setup errors and removes only its own handle. A host `eth0` plus
-localhost clients is not a valid substitute.
-
-## Trial protocol and environment record
-
-Before collecting results, record revision/dirty status, OS/kernel, Python and
-resolved dependency versions, CPU/core/RAM, CPU limits/governor, Docker versions,
-NIC/veth topology, MTU, qdisc output, fixture hash/record count, optional fields,
-compression flags, cache policy, datastore versions, warm-up, concurrent load,
-request count and timeout. Preserve this record beside raw output.
-
-Starting design: at least five independent trials, 1000 requests per condition
-per system, concurrency 20, 15 s request timeout, pooled connections, no client
-retries or redirects. The wrapper alternates adaptive-first and baseline-first
-trial order unless explicitly overridden. Conditions retain the requested order;
-randomization across conditions must be recorded in a study schedule. Discarded
-warm-up requires an explicit separate run and documented rule; there is currently
-no automatic warm-up. Run larger counts only after capacity testing.
-
-Both clients advertise gzip. Control returns the full identity upstream body;
-adaptive may gzip reduced responses. This treats compression + omission as the
-intervention package. Separate compression-only/omission-only controls are needed
-to attribute their individual contributions. Run cached/outage/queue experiments
-as separate protocols with explicit freshness/deduplication controls.
-
-## Metrics, aggregation and artifacts
-
-- Success: an HTTP 2xx response; 3xx/4xx/5xx and transport exceptions fail.
-  202 means accepted, not committed; this protocol uses GET only.
-- Partial: HTTP 206 or `X-Response-Completeness: reduced`; report separately from
-  HTTP success. A 200 skeleton can be successful at HTTP level but incomplete.
-- Latency: wall time after acquiring the concurrency semaphore, through receipt
-  of the full encoded response body; excludes waiting for a slot. Percentiles
-  use nearest rank `ceil(p/100*n)` across **all attempts**, including failures.
-  A fast error can lower a percentile, so always interpret success alongside it.
-- Size: raw encoded HTTP body bytes from `aiter_raw`, before HTTPX decompression;
-  excludes headers, TCP/IP/TLS overhead/retransmissions. Failed transport requests
-  record zero; partially received bytes before failure are currently not retained.
-  It is not a complete wire-byte or bandwidth measurement.
-- Each trial writes `run_NN.csv`, `run_NN.raw.csv`, and `run_NN.manifest.json`.
-  Raw rows preserve condition, system, request index (completion order), latency,
-  status (0 on transport error), encoded size, success and partial indicator.
-  Manifests record platform/interpreter, arguments, impairment label and byte/unit
-  definitions. They do not automatically capture hardware or resolved packages.
-- `aggregate.csv`: condition, system, metric, mean, sample standard deviation
-  (n−1), trials. It aggregates trial summaries; a mean of p95s is not a pooled p95.
-  A single trial reports zero spread by convention, not statistical certainty.
-  Empty/mismatched/duplicate/nonfinite/missing trial cells are rejected. Outputs
-  refuse to overwrite previous study evidence.
-
-Do not compare “improvement” alone. Publish absolute bytes/latencies, error rate,
-partial rate, application task completeness and CPU overhead. Pre-specify paired
-confidence intervals and how censored timeouts are handled before a paper; the
-current tool does not implement inferential statistics. Charts (`--charts`) and
-S3 upload (`--s3-bucket`) are optional lazy dependencies. Upload is a separate,
-explicit cloud action needing credentials and cost approval; it was not executed.
-Use IAM roles or local credential tooling, never committed keys.
-
-## Threats to validity
-
-Synthetic optional-heavy JSON favors omission and may exaggerate practical byte
-savings. Shared host/datastores, startup/thermal effects, order, connection reuse,
-CPU throttling, loss randomness, host scheduling and partial failure affect results.
-One-way netem is not a cellular trace or a Ghanaian network model. Classifier hints
-are controlled labels, not prediction accuracy. Cache hits, upstream drift, Nginx
-compression, public APIs or a different baseline can introduce confounders.
-The conventional baseline differs in multiple subsystems. No throughput, regional
-coverage, energy/cost savings or user-experience claim follows from these tests.
-Independent reproduction and realistic consented workloads are future work.
+The optional-heavy synthetic payload strongly favors omission and repetitive gzip.
+No semantic equivalence, user task utility, energy, cellular realism, throughput,
+regional coverage or production benefit follows. Client validation/CPU, shared host
+and datastores, logging/queue background work, CPU scheduling, connection reuse,
+mode-to-process assignment, warm-up, one-way loss/delay and time-varying bandwidth
+remain threats. Netem parameters are not measured RTT or a mobile trace. Required
+fields are a workload-specific contract, not a universal data schema. Unsupported
+content codings and other workloads need a new versioned protocol. Independent
+reproduction, realistic workloads, server resource measurements and impaired
+four-mode data remain pending. Use [the results template](RESULTS_TEMPLATE.md).

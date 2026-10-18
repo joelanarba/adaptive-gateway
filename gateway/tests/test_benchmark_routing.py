@@ -75,7 +75,11 @@ async def test_fixture_route_preserves_matched_experiment(
         assert response.headers["X-Network-Quality"] == quality
         if not adaptation_enabled or quality == "GOOD":
             assert response.json() == PAYLOAD
-            assert "X-Adaptive-Mode" not in response.headers
+            assert response.headers["X-Adaptive-Mode"] == "none"
+            assert response.headers["X-Response-Completeness"] == "full"
+            assert response.headers["X-Response-Mode"] == (
+                "adaptive" if adaptation_enabled else "full"
+            )
         else:
             expected = [
                 {

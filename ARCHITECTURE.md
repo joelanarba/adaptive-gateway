@@ -87,12 +87,23 @@ remain design work; stale responses are not universally correct.
 
 ## Representation and HTTP semantics
 
-GOOD JSON bodies are preserved. DEGRADED removes only configured optional paths.
+The default `RESPONSE_MODE=adaptive` policy preserves GOOD JSON bodies.
+DEGRADED removes only configured optional paths.
 POOR with cache keeps the cached array lengths; POOR without cache additionally
 truncates all arrays recursively to ten items. Nested dictionaries/arrays are
 handled without mutating the parsed source. Unparseable JSON passes through.
 Only 200 GET JSON responses are eligible; error/empty/range/non-JSON/write
 responses and `Cache-Control: no-transform` are preserved.
+
+Operator-selected `RESPONSE_MODE=full/compression/removal/combined` provides four
+fixed experimental controls independent of tier. Removal uses configured fields
+and preserves item counts; only adaptive POOR truncates arrays. Compression respects
+Accept-Encoding, uses level 9 and mtime 0, and must reduce size. The study fixture
+disables caching. `ADAPTATION_ENABLED=false` overrides the mode to full.
+Eligible responses identify the selected `X-Response-Mode` and actual content with
+`X-Adaptive-Mode: none/stripped/skeleton` and completeness full/reduced. Full and
+compression-only responses now explicitly carry full/none markers. Content-Encoding
+identifies actual compression separately. See [the protocol](docs/EXPERIMENT_METHODOLOGY.md).
 
 Skeletons are application representations, not byte ranges, so use 200 plus
 `X-Adaptive-Mode: skeleton` and `X-Response-Completeness: reduced`.

@@ -81,7 +81,7 @@ def _is_json(response: Response) -> bool:
     return media_type == "application/json" or media_type.endswith("+json")
 
 
-def _accepts_gzip(value: str) -> bool:
+def _accepted_codings(value: str) -> dict[str, bool]:
     codings = {}
     for part in value.lower().split(","):
         name, *parameters = part.strip().split(";")
@@ -94,15 +94,22 @@ def _accepts_gzip(value: str) -> bool:
                 except ValueError:
                     quality = 0.0
         codings[name] = 0 < quality <= 1
+    return codings
+
+
+def _accepts_gzip(value: str) -> bool:
+    codings = _accepted_codings(value)
     return codings.get("gzip", codings.get("*", False))
+
+
+def _accepts_identity(value: str) -> bool:
+    codings = _accepted_codings(value)
+    return codings.get("identity", codings.get("*", True))
 
 
 class ResponseOptimizerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
-
-        if not settings.adaptation_enabled:
-            return response
 
         if not getattr(request.state, "optimizable", False):
             return response
@@ -114,6 +121,8 @@ class ResponseOptimizerMiddleware(BaseHTTPMiddleware):
             return response
         if "content-encoding" in response.headers:
             return response
+
+        mode = settings.response_mode if settings.adaptation_enabled else "full"
 
         # Drain the (streaming) body produced by the route.
         chunks = []
@@ -137,10 +146,19 @@ class ResponseOptimizerMiddleware(BaseHTTPMiddleware):
         degraded_like = quality == NetworkQuality.DEGRADED or (
             quality == NetworkQuality.POOR and served_from_cache
         )
-        if degraded_like and body:
+        skeleton = (
+            mode == "adaptive"
+            and quality == NetworkQuality.POOR
+            and not served_from_cache
+        )
+        remove_fields = mode in {"removal", "combined"} or (
+            mode == "adaptive" and degraded_like
+        )
+        if remove_fields and body:
             new_body = self._transform_json(body, optional_fields, skeleton=False)
-        elif quality == NetworkQuality.POOR and body and not served_from_cache:
+        elif skeleton and body:
             new_body = self._transform_json(body, optional_fields, skeleton=True)
+        reduced = new_body != body
 
         headers = dict(response.headers)
         vary = [
@@ -154,12 +172,18 @@ class ResponseOptimizerMiddleware(BaseHTTPMiddleware):
         headers.pop("content-length", None)
         gzipped = False
         if (
-            quality in (NetworkQuality.DEGRADED, NetworkQuality.POOR)
+            (
+                mode in {"compression", "combined"}
+                or (
+                    mode == "adaptive"
+                    and quality in (NetworkQuality.DEGRADED, NetworkQuality.POOR)
+                )
+            )
             and _accepts_gzip(request.headers.get("accept-encoding", ""))
             and "content-encoding" not in {k.lower() for k in headers}
             and len(new_body) >= GZIP_MIN_SIZE
         ):
-            compressed = gzip.compress(new_body, mtime=0)
+            compressed = gzip.compress(new_body, compresslevel=9, mtime=0)
             if len(compressed) < len(new_body):
                 new_body = compressed
                 headers["content-encoding"] = "gzip"
@@ -169,16 +193,27 @@ class ResponseOptimizerMiddleware(BaseHTTPMiddleware):
             for name in REPRESENTATION_HEADERS:
                 headers.pop(name, None)
             headers["cache-control"] = "private, no-store"
-            headers["X-Adaptive-Mode"] = (
-                "skeleton"
-                if quality == NetworkQuality.POOR and not served_from_cache
-                else "stripped"
+
+        if not gzipped and not _accepts_identity(
+            request.headers.get("accept-encoding", "")
+        ):
+            # The selected policy cannot supply a coding the client permits.
+            request.state.response_size_optimized = 0
+            record_response_size(quality.value, "optimized", 0)
+            return Response(
+                status_code=406,
+                headers={"vary": headers["vary"], "cache-control": "no-store"},
+                background=response.background,
             )
-            headers["X-Response-Completeness"] = (
-                "reduced"
-                if (not gzipped or gzip.decompress(new_body) != body)
-                else "full"
-            )
+
+        # These describe the selected policy and the actual content separately.
+        # Compression does not remove fields. Fixed removal modes retain all items,
+        # even under POOR; only the default adaptive policy can make a skeleton.
+        headers["x-response-mode"] = mode
+        headers["x-adaptive-mode"] = (
+            "skeleton" if skeleton and reduced else "stripped" if reduced else "none"
+        )
+        headers["x-response-completeness"] = "reduced" if reduced else "full"
 
         request.state.response_size_optimized = len(new_body)
 
@@ -191,7 +226,7 @@ class ResponseOptimizerMiddleware(BaseHTTPMiddleware):
                 original_bytes=len(body),
                 optimized_bytes=len(new_body),
                 gzipped=gzipped,
-                skeleton=headers.get("X-Adaptive-Mode") == "skeleton",
+                skeleton=headers.get("x-adaptive-mode") == "skeleton",
             )
 
         result = Response(

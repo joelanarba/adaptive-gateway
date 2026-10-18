@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Week 7 research experiment runner for the Adaptive API Gateway.
+"""Legacy two-system experiment runner for the Adaptive API Gateway.
+
+New controlled studies should use ``run_study.py``. This entry point retains
+the historical CSV format; its rows lack body/encoding/fixture validation.
 
 This is the AGW-BENCH deliverable. It is an async load generator that drives
 the gateway (and, optionally, a plain-FastAPI baseline) under simulated network
@@ -116,7 +119,7 @@ class ConditionStats:
 
     @property
     def success_rate(self) -> float:
-        """Fraction of requests that succeeded (status < 500, no exception)."""
+        """Fraction with complete HTTP 2xx responses and no transport exception."""
         if not self.results:
             return 0.0
         return sum(1 for r in self.results if r.success) / self.count

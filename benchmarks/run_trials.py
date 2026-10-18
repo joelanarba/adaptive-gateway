@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Multi-trial wrapper around ``benchmarks/run_experiment.py`` (AGW-BENCH).
+"""Legacy multi-trial wrapper around ``benchmarks/run_experiment.py``.
+
+Use ``run_study.py`` for new research: its summaries derive from validated raw
+observations. This wrapper retains the historical rounded-summary CSV analysis
+only for compatibility and must not be used to isolate compression/removal.
 
 A single experiment run is noisy: latency percentiles and even success rates
 wobble between runs under ``tc netem`` loss. For the ACM COMPASS paper we want

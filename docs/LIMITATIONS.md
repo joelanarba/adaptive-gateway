@@ -35,9 +35,14 @@ These are explicit limits, not completed roadmap items.
   follow completeness/acceptance headers rather than assume full results.
 - SDKs are small prototypes. The Express SDK is a binary standalone stripper;
   it does not implement Redis EWMA, POOR skeletons, proxy/cache or queue semantics.
-- Benchmarks have no validated performance results. Synthetic optional-heavy
-  payloads, partial representations, system order and network placement can bias
-  results. Existing result files lack provenance; no paper/publication claim follows.
+- Preliminary EC2 evidence exists under research/evidence/preliminary_2026-10-18;
+  it has only three main trials, reduced content and coupled interventions. See
+  HISTORICAL_EVIDENCE_AUDIT.md. New four-mode impaired results remain uncollected.
+  The controlled runner validates the known synthetic fixture, but cannot attest
+  remote server settings or external impairment, prove trial independence, measure
+  application utility, or establish significance. Synthetic optional-heavy data,
+  client validation CPU, host/process order and network placement can bias results.
+  Other older result files still lack provenance; no paper/publication claim follows.
 - CloudFormation is an unverified host scaffold and does not deploy an application
   automatically. No cloud resources, GitHub settings, commits or releases were made.
 - Repository history, existing credential exposure, full dependency licenses and
