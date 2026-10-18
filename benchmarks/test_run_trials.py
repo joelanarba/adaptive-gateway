@@ -66,6 +66,28 @@ RUN_2 = [
 
 
 class AggregateTest(unittest.TestCase):
+    def test_forwards_fixture_path_and_matched_gateway_urls(self) -> None:
+        forwarded = [
+            "--no-netem",
+            "--target",
+            "http://localhost:8001",
+            "--baseline",
+            "http://localhost:8002",
+            "--path",
+            "/proxy/fixture/items",
+        ]
+
+        def fake_run(cmd, **kwargs):
+            self.assertEqual(cmd[2 : 2 + len(forwarded)], forwarded)
+            _write_csv(Path(_extract_out(cmd)), RUN_1)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with TemporaryDirectory() as tmp:
+            with patch.object(run_trials.subprocess, "run", side_effect=fake_run):
+                run_trials.run_trials(
+                    1, Path("run_experiment.py"), forwarded, Path(tmp)
+                )
+
     def test_mean_and_stddev_for_one_cell(self) -> None:
         per_run = [RUN_1, RUN_2]
         calls = {"n": 0}

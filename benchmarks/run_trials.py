@@ -16,14 +16,15 @@ the cross-run statistics on top. Standard library only (``csv``, ``statistics``,
 
 Usage examples
 --------------
-    # 5 trials (default), pure load test, no netem:
-    python benchmarks/run_trials.py --no-netem
+    # 5 trials (default), matched experiment gateways, no netem:
+    python benchmarks/run_trials.py --no-netem \
+        --target http://localhost:8001 --baseline http://localhost:8002
 
-    # 10 trials with netem, comparing against a baseline. Every flag except
+    # 10 hint-only trials. Every flag except
     # --out / --charts is forwarded verbatim to run_experiment.py:
-    sudo python benchmarks/run_trials.py --trials 10 \
-        --target http://localhost:8000 --baseline http://localhost:9000 \
-        --interface eth0 --requests 1000 --concurrency 20
+    python benchmarks/run_trials.py --trials 10 --no-netem \
+        --target http://localhost:8001 --baseline http://localhost:8002 \
+        --path /proxy/fixture/items --requests 1000 --concurrency 20
 
 Outputs:
     benchmarks/results/runs/run_NN.csv   one raw CSV per trial

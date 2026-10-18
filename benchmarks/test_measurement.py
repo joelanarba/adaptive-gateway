@@ -19,6 +19,42 @@ from run_experiment import (
 from run_trials import aggregate, run_trials
 
 
+@pytest.mark.parametrize("override", [None, "/proxy/jsonplaceholder/posts"])
+async def test_benchmark_path_reaches_both_systems_unchanged(monkeypatch, override):
+    expected_path = override or "/proxy/fixture/items"
+    args = build_parser().parse_args(
+        [
+            "--no-netem",
+            "--target",
+            "http://adaptive.test/",
+            "--baseline",
+            "http://control.test/",
+            "--conditions",
+            "GOOD",
+            "--requests",
+            "1",
+            *(["--path", override] if override else []),
+        ]
+    )
+    urls = []
+
+    def upstream(request):
+        urls.append(str(request.url))
+        return httpx.Response(200, stream=httpx.ByteStream(b"[]"))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "run_experiment.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(upstream), **kwargs),
+    )
+    stats = await run_experiment(args)
+    assert urls == [
+        f"http://adaptive.test{expected_path}",
+        f"http://control.test{expected_path}",
+    ]
+    assert [stat.success_rate for stat in stats] == [1.0, 1.0]
+
+
 @pytest.mark.parametrize(
     "status,success,partial",
     [

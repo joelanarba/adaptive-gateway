@@ -13,15 +13,15 @@ depend on measured RTT, which keeps the experiment reproducible.
 
 Usage examples
 --------------
-    # Load test only (no root / no netem), against a running gateway:
-    python benchmarks/run_experiment.py --no-netem
+    # Hint-only load test against the matched experiment Compose gateways:
+    python benchmarks/run_experiment.py --no-netem \
+        --target http://localhost:8001 --baseline http://localhost:8002
 
-    # Full experiment on EC2 with netem, comparing against a baseline:
-    sudo python benchmarks/run_experiment.py \
-        --target http://localhost:8000 \
-        --baseline http://localhost:9000 \
-        --interface eth0 --requests 1000 --concurrency 20 \
-        --charts --s3-bucket joel-adaptive-gateway-research
+The default path is ``/proxy/fixture/items`` from ``benchmarks/gateway.yaml``.
+For the development gateway or conventional baseline with JSONPlaceholder,
+explicitly pass ``--path /proxy/jsonplaceholder/posts`` and configure that
+upstream on both systems. See ``docs/EXPERIMENT_METHODOLOGY.md`` for isolated
+netem topology and the full trial protocol.
 
 Core dependencies: ``httpx`` + the standard library only. ``matplotlib`` and
 ``boto3`` are optional and imported lazily; their absence never crashes the run.
@@ -598,12 +598,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline",
         default=None,
-        help="Optional plain-FastAPI baseline base URL for comparison.",
+        help="Optional control gateway (or conventional baseline) base URL.",
     )
     parser.add_argument(
         "--path",
-        default="/proxy/jsonplaceholder/posts",
-        help="Request path appended to the base URL.",
+        default="/proxy/fixture/items",
+        help="Request path appended unchanged to both base URLs (fixture: /items).",
     )
     parser.add_argument(
         "--requests",

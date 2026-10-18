@@ -26,6 +26,8 @@ services:
       SECRET_KEY: disposable-experiment-signing-key-local-only
       DATABASE_URL: postgresql+asyncpg://experiment:disposable-experiment-only@postgres:5432/experiment
       REDIS_URL: redis://redis:6379
+      GATEWAY_CONFIG_FILE: /app/gateway.yaml
+      ADAPTATION_ENABLED: 'true'
       UPSTREAM_SERVICES: '{}'
       ALLOW_UNLISTED_UPSTREAMS: 'false'
       RATE_LIMIT_ENABLED: 'false'

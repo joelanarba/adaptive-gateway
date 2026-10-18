@@ -67,6 +67,113 @@ runs were **not executed** in the Windows audit environment.
 Stop the disposable project with `docker compose -p agw-experiment -f
  docker-compose.experiment.yml down` (without deleting any other project's data).
 
+## Benchmark routing regression and EC2 verification
+
+The experiment uses `/proxy/fixture/items`. The runner appends `--path` unchanged
+to each gateway base URL; `run_trials.py` forwards it to `run_experiment.py`.
+Supply base URLs such as `http://localhost:8001` and `http://localhost:8002`,
+without `/proxy` appended. Inside the gateway, `fixture` selects
+`http://fixture:9100`, and the remaining `items` path becomes
+`http://fixture:9100/items`. The fixture defines `/items`, not `/posts`.
+
+The two reported 404 bodies have different causes in this source:
+
+- `/proxy/jsonplaceholder/posts` returns `unknown upstream service` before any
+  upstream call: the experiment mounts `benchmarks/gateway.yaml`, whose only
+  upstream is `fixture`, with discovery disabled. The repository-root
+  `gateway.yaml` defines `jsonplaceholder` for development and is **not** the
+  experiment configuration. `UPSTREAM_SERVICES='{}'` is only the initial env map;
+  the loader merges YAML upstreams into it at import time.
+- `/proxy/fixture/posts` matches the proxy router and forwards `/posts`; the
+  fixture's FastAPI app returns `Not Found`, which the gateway relays with
+  `X-Cache-Status: BYPASS`. A missing gateway route can also return `Not Found`,
+  so inspect the forwarded target, fixture routes and response headers instead
+  of diagnosing from the status/body alone.
+
+The runner previously defaulted to the development JSONPlaceholder path. Its
+default now matches the experiment fixture; explicit `--path` overrides still
+work. Compose explicitly selects `/app/gateway.yaml` and enables adaptation on
+the adaptive instance; the control inherits the same settings except
+`ADAPTATION_ENABLED=false`. The gateway Dockerfile uses `./gateway` as its build
+context and `/app` as its working directory, so the root development YAML is not
+copied into that image. No proxy-route or fixture `/posts` alias is needed.
+
+Docker-free regression checks from the repository root (use the existing virtual
+environment's Python):
+
+```bash
+python -m pytest -q -p no:cacheprovider gateway/tests/test_benchmark_routing.py \
+  benchmarks/test_measurement.py benchmarks/test_run_trials.py
+python -m pytest -q -p no:cacheprovider
+```
+
+These tests use the actual gateway and fixture ASGI apps with SQLite and fake
+Redis, plus mocked load-generator transports. They do not start Uvicorn, Docker,
+PostgreSQL or a real Redis server, validate Compose through Docker, or provide
+performance evidence. Earlier 0%-success trials are invalid performance evidence;
+preserve them and use a fresh directory for corrected runs.
+
+After reviewing and pushing this change, pull that revision on EC2 and run the
+following there. **These Docker/EC2 checks have not been executed locally.**
+
+```bash
+git rev-parse HEAD
+git status --short
+docker compose -p agw-experiment -f docker-compose.experiment.yml config --quiet
+docker compose -p agw-experiment -f docker-compose.experiment.yml up --build -d
+docker compose -p agw-experiment -f docker-compose.experiment.yml ps
+docker compose -p agw-experiment -f docker-compose.experiment.yml logs --tail=50 adaptive control
+for service in adaptive control; do
+  docker compose -p agw-experiment -f docker-compose.experiment.yml exec -T "$service" \
+    python -c 'import config; print(config.__file__); print(config.get_loaded_yaml_path()); print(config.settings.upstream_services); print("adaptation:", config.settings.adaptation_enabled); print("fixture rule:", config.get_route_rule("fixture"))'
+done
+docker compose -p agw-experiment -f docker-compose.experiment.yml exec -T fixture \
+  python -c 'import app; print([r.path for r in app.app.routes])'
+```
+
+Confirm startup logs report `config_source=/app/gateway.yaml`; both container
+config checks should show `{'fixture': 'http://fixture:9100'}`, caching disabled,
+and adaptation `True` for adaptive and `False` for control. The `exec` commands
+import configuration in fresh interpreter processes; they do not inspect a
+worker's mutable Python state. Rebuild/recreate the gateways if image revision,
+mounted file, startup logs or these values disagree with the reviewed source.
+Without access to that deployment, stale images or mount overrides remain
+unverified possibilities, not established root causes.
+
+Check real HTTP delivery before collecting trials (Python stdlib only):
+
+```bash
+python - <<'PY'
+import json
+import urllib.request
+
+for port in (8001, 8002):
+    for ect in ("4g", "3g", "2g"):
+        request = urllib.request.Request(
+            f"http://localhost:{port}/proxy/fixture/items",
+            headers={"ECT": ect, "Accept-Encoding": "identity"},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.load(response)
+            reduced = port == 8001 and ect != "4g"
+            assert response.status == 200
+            assert response.headers["X-Cache-Status"] == "BYPASS"
+            assert len(payload) == (10 if port == 8001 and ect == "2g" else 100)
+            assert ("body" not in payload[0]) == reduced
+            assert ("debug" not in payload[0]["meta"]) == reduced
+            print(port, ect, response.status, len(payload), response.headers.get("X-Adaptive-Mode"))
+PY
+python benchmarks/run_trials.py --trials 1 --no-netem \
+  --target http://localhost:8001 --baseline http://localhost:8002 \
+  --path /proxy/fixture/items --requests 10 --concurrency 2 --timeout 15 \
+  --results-dir "benchmarks/results/ec2-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+Require 100% HTTP success for this hint-only functional smoke run on both systems
+before the larger trial protocol. Inspect raw statuses and partial rates; the
+runner records HTTP failures and does not automatically reject an all-404 run.
+This smoke test still does not establish behavior under real network impairment.
+
 ## Isolated network impairment topology (Linux only)
 
 Never apply a root qdisc to a workstation, SSH, shared server or cloud interface.
