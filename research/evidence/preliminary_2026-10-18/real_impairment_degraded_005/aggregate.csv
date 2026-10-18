@@ -1,0 +1,17 @@
+condition,system,metric,mean,stddev,trials
+DEGRADED,adaptive,requests,10.0,0.0,3
+DEGRADED,adaptive,success_rate,1.0,0.0,3
+DEGRADED,adaptive,error_rate,0.0,0.0,3
+DEGRADED,adaptive,p50_latency_ms,218.3333,0.3955,3
+DEGRADED,adaptive,p95_latency_ms,451.9533,16.6342,3
+DEGRADED,adaptive,p99_latency_ms,451.9533,16.6342,3
+DEGRADED,adaptive,mean_size_bytes,561.0,0.0,3
+DEGRADED,adaptive,partial_rate,1.0,0.0,3
+DEGRADED,baseline,requests,10.0,0.0,3
+DEGRADED,baseline,success_rate,0.9333,0.0577,3
+DEGRADED,baseline,error_rate,0.0667,0.0577,3
+DEGRADED,baseline,p50_latency_ms,4259.47,142.7112,3
+DEGRADED,baseline,p95_latency_ms,6804.1033,1447.7655,3
+DEGRADED,baseline,p99_latency_ms,6804.1033,1447.7655,3
+DEGRADED,baseline,mean_size_bytes,247408.9333,15304.4587,3
+DEGRADED,baseline,partial_rate,0.0,0.0,3

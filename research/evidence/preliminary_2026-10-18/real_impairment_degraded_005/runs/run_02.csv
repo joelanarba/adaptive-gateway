@@ -1,0 +1,3 @@
+condition,system,requests,success_rate,error_rate,p50_latency_ms,p95_latency_ms,p99_latency_ms,mean_size_bytes,partial_rate
+DEGRADED,baseline,10,1.0,0.0,4416.85,5722.42,5722.42,265081.0,0.0
+DEGRADED,adaptive,10,1.0,0.0,218.79,434.01,434.01,561.0,1.0
