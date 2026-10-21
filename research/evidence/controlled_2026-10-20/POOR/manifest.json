@@ -1,0 +1,331 @@
+{
+  "client_hints": {
+    "Accept-Encoding": "gzip",
+    "ECT": "2g",
+    "X-Client-RTT": "800"
+  },
+  "completed_utc": "2026-10-20T11:55:39.106583+00:00",
+  "condition": "POOR",
+  "configuration": {
+    "adaptation_enabled_required": true,
+    "cache_status_required": "BYPASS",
+    "cacheable": false,
+    "gateway_yaml_sha256": "4121156f391f5206a76a490566fe3c86ac294e4680221024a15d765f7ce0667f",
+    "gzip_compresslevel": 9,
+    "gzip_min_body_bytes": 256,
+    "optional_fields": [
+      "body",
+      "meta.debug"
+    ],
+    "required_operator_settings": "RESPONSE_MODE per process; same other settings; no edge compression"
+  },
+  "environment": {
+    "architecture": "x86_64",
+    "dependencies": {
+      "PyYAML": "6.0.1",
+      "fastapi": "0.143.3",
+      "httpx": "0.27.0",
+      "pydantic": "2.14.1",
+      "starlette": "1.8.0",
+      "uvicorn": "0.29.0"
+    },
+    "kernel": "7.0.0-1014-aws",
+    "logical_cpus": 2,
+    "python": "3.12.3",
+    "system": "Linux"
+  },
+  "impairment": {
+    "delay_ms_one_way_egress": 1000.0,
+    "kind": "external",
+    "loss_pct": 5.0,
+    "loss_seed_operator_attestation": null,
+    "rate_kbit": 256.0,
+    "verified_by_runner": false
+  },
+  "invalid_2xx_responses_including_warmup": 0,
+  "measurement_definitions": {
+    "aggregation": "unrounded per-trial metrics from requests.jsonl; sample stddev n-1; null for n<2",
+    "body_means": "valid_response bodies only; all-attempt encoded byte mean separately labelled",
+    "capture_limit_bytes": 8388608,
+    "decoded_bytes": "identity or validated gzip body length; null on failed/incomplete decoding",
+    "effects": "paired trial treatment-reference differences, descriptive mean/stddev/range; no confidence interval or significance",
+    "encoded_bytes": "aiter_raw body bytes including partial receipt; excludes headers/TLS/TCP/IP/retransmission",
+    "field_coverage": "present required+optional leaf cells / 500 full fixture cells; not semantic utility",
+    "latency_ms": "perf_counter: submission through encoded body receipt/error; excludes validation and worker wait",
+    "percentiles": "nearest rank ceil(p*n/100); all attempts and successful-only reported separately",
+    "required_values_preserved": "required values correct in every returned item; see item_retention for omissions",
+    "success": "complete HTTP 2xx; valid_response additionally requires 200 and fixture/mode/metadata checks",
+    "timeout": "HTTPX timeout per I/O operation, not a hard total deadline",
+    "warmup": "recorded with phase=warmup; excluded from analysis"
+  },
+  "modes": {
+    "combined": "http://10.250.0.1:8004",
+    "compression": "http://10.250.0.1:8002",
+    "full": "http://10.250.0.1:8001",
+    "removal": "http://10.250.0.1:8003"
+  },
+  "nonvalid_attempts_including_warmup": 7,
+  "raw_sha256": "3421d31df4009b35e93c202f3ec96f6e079bf34f2a0e563d626fd36ee4836170",
+  "schedule": [
+    {
+      "mode": "full",
+      "position": 1,
+      "trial_id": "trial_001"
+    },
+    {
+      "mode": "combined",
+      "position": 2,
+      "trial_id": "trial_001"
+    },
+    {
+      "mode": "removal",
+      "position": 3,
+      "trial_id": "trial_001"
+    },
+    {
+      "mode": "compression",
+      "position": 4,
+      "trial_id": "trial_001"
+    },
+    {
+      "mode": "combined",
+      "position": 1,
+      "trial_id": "trial_002"
+    },
+    {
+      "mode": "removal",
+      "position": 2,
+      "trial_id": "trial_002"
+    },
+    {
+      "mode": "compression",
+      "position": 3,
+      "trial_id": "trial_002"
+    },
+    {
+      "mode": "full",
+      "position": 4,
+      "trial_id": "trial_002"
+    },
+    {
+      "mode": "removal",
+      "position": 1,
+      "trial_id": "trial_003"
+    },
+    {
+      "mode": "compression",
+      "position": 2,
+      "trial_id": "trial_003"
+    },
+    {
+      "mode": "full",
+      "position": 3,
+      "trial_id": "trial_003"
+    },
+    {
+      "mode": "combined",
+      "position": 4,
+      "trial_id": "trial_003"
+    },
+    {
+      "mode": "compression",
+      "position": 1,
+      "trial_id": "trial_004"
+    },
+    {
+      "mode": "full",
+      "position": 2,
+      "trial_id": "trial_004"
+    },
+    {
+      "mode": "combined",
+      "position": 3,
+      "trial_id": "trial_004"
+    },
+    {
+      "mode": "removal",
+      "position": 4,
+      "trial_id": "trial_004"
+    },
+    {
+      "mode": "full",
+      "position": 1,
+      "trial_id": "trial_005"
+    },
+    {
+      "mode": "combined",
+      "position": 2,
+      "trial_id": "trial_005"
+    },
+    {
+      "mode": "removal",
+      "position": 3,
+      "trial_id": "trial_005"
+    },
+    {
+      "mode": "compression",
+      "position": 4,
+      "trial_id": "trial_005"
+    },
+    {
+      "mode": "combined",
+      "position": 1,
+      "trial_id": "trial_006"
+    },
+    {
+      "mode": "removal",
+      "position": 2,
+      "trial_id": "trial_006"
+    },
+    {
+      "mode": "compression",
+      "position": 3,
+      "trial_id": "trial_006"
+    },
+    {
+      "mode": "full",
+      "position": 4,
+      "trial_id": "trial_006"
+    },
+    {
+      "mode": "removal",
+      "position": 1,
+      "trial_id": "trial_007"
+    },
+    {
+      "mode": "compression",
+      "position": 2,
+      "trial_id": "trial_007"
+    },
+    {
+      "mode": "full",
+      "position": 3,
+      "trial_id": "trial_007"
+    },
+    {
+      "mode": "combined",
+      "position": 4,
+      "trial_id": "trial_007"
+    },
+    {
+      "mode": "compression",
+      "position": 1,
+      "trial_id": "trial_008"
+    },
+    {
+      "mode": "full",
+      "position": 2,
+      "trial_id": "trial_008"
+    },
+    {
+      "mode": "combined",
+      "position": 3,
+      "trial_id": "trial_008"
+    },
+    {
+      "mode": "removal",
+      "position": 4,
+      "trial_id": "trial_008"
+    }
+  ],
+  "schedule_algorithm": "seeded shuffle then rotate one position per trial",
+  "schedule_seed": 20261018,
+  "schema_version": 2,
+  "server_revision_operator_attestation": "14b5adfba91a0ee35205c7975f51e07a7a5e7570",
+  "source": {
+    "dirty": false,
+    "revision": "14b5adfba91a0ee35205c7975f51e07a7a5e7570",
+    "source_file_sha256": {
+      "benchmarks/baseline/baseline_proxy.py": "bc381c158e2625a70dcc867fcaa916e289978aca7462c00365000654b713a30f",
+      "benchmarks/fixture/app.py": "b28850c89b7a12ecc86d2a18fdcced36d168aae8c68d6e969284b4f14eb03276",
+      "benchmarks/fixture/contract.py": "bd2f03f01913b71b3a514593bdd543bdd79157eecb5cd8b5132ba8959da8c469",
+      "benchmarks/run_experiment.py": "717227237474d1af163cc1d105ad53d9aac42e1074fae851fe6faf34c1ca4d44",
+      "benchmarks/run_study.py": "f8f8a1b0ab4c9ff174e2b614cdc0aa6fa88304cd88edcfa48d7ccc2d5e163e73",
+      "benchmarks/run_trials.py": "0a1fd58f582305c87cd72670becc7a9911ef02ab59f12b0f46f7bb30c928b914",
+      "benchmarks/study_analysis.py": "3db4475d7bee5f48f13ec7096c2edae56461046dc1e1b689c2bc4c988a158727",
+      "benchmarks/study_measurement.py": "4b5342f2c6e5b76ab9526f4896edb46d4041409e6e875d5d2d673bd064e47b31",
+      "benchmarks/test_measurement.py": "4d3b84a4d070d8a23b453fb722b16a96ae690a378f9625c108d68260c90929de",
+      "benchmarks/test_run_trials.py": "bb11ecd68ffcdc33f386c07bbb26effad51f7d5b9331b9e3d47f3c61ed0523c5",
+      "benchmarks/test_study.py": "4ec0a470b0d0fd2ad6151bd8549121c5b12020b398f618b7b6f4d0e5b3850395",
+      "gateway/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/auth/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/auth/dependencies.py": "02fbfe3576dbaae5e01a7e8a257d82ecd28d3d9496cb5bc9b61212861000aae9",
+      "gateway/auth/security.py": "f8ee22e7f6f7fdd0dcf9894f56120e79e8c70120123c3e5e0049e89d890cc5ff",
+      "gateway/cache/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/cache/redis_client.py": "96f1ebaa33ee0306140eb816b4fcba3367ee4bd5099cb6e55e6e52ad84548cb8",
+      "gateway/config.py": "a0981c48ce58d3c22aa1a637d5159529925bef204c96903669767a1db9d36607",
+      "gateway/main.py": "5447f6fb53672951c26b521858cab8f47d5792195b62655433595f6156ee3eeb",
+      "gateway/manage.py": "11e8339edcf78f61fdfd73b34882ac0398a3183e0a6dce6bd64fb98cd062bda5",
+      "gateway/middleware/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/middleware/auth.py": "f169f420317d8bb4c3d2065077c2fbdeda8a8d258df6eeb3107a4a78827610c2",
+      "gateway/middleware/body_limit.py": "9c62d2ef3e8e572459cae094cd0ee1e236674e92438ddd35a64512974a160c55",
+      "gateway/middleware/network_detector.py": "e2c373a5f8a01d5723d305e0ac3e4e047f394c26f5d60a6a41f26cbe07d63c09",
+      "gateway/middleware/rate_limit.py": "1ab48b1d9111c219c30399303750c2cf0a634589d1c826f8e6344dcfada9756d",
+      "gateway/middleware/response_optimizer.py": "946d91a523c721904e1439b0a92fb15a37105c646aa912baf7e2ebccbac916b9",
+      "gateway/middleware/rtt_state.py": "774d8b5cabae03f48e0cb59211968bb4f54e966cb1d9d5fede305634c53df618",
+      "gateway/migrations/env.py": "9756275a8a0c41b5f6b4013e62532bc5e2b571023044f6efba6825da143c2fd0",
+      "gateway/migrations/versions/95b2091b44f6_initial_schema.py": "7735674fa14ca7b7f0e2008d72a7017855e89244281d9f8ae52feb9a357b8194",
+      "gateway/models/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/models/db.py": "b4ed815f3eb69b5366d144413308fd45d331d35fbee17d7e0fbb1ad3266db3a0",
+      "gateway/models/schemas.py": "1f3eb4070a14a7029178ae79dc6336dea0a6524124ba074c690e74e46ce14238",
+      "gateway/offline_queue/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/offline_queue/sync_worker.py": "0cdf26b158e2acbe6be8c24132154d20c64be283e574d49eadc7bd04bc375228",
+      "gateway/requirements.txt": "52536845f88afcfe8e422862bb249dd15fd3ee0f2f4c549e577dc3b7a99c964d",
+      "gateway/routes/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/routes/admin.py": "0a988da7778e2e91a5ed6dcae4d144fd95177be2772ec5fb5ea04f085f47ce72",
+      "gateway/routes/auth.py": "1c10ca6f5bebaf0493957fa109c68569d62f832c3072d7fb4836f45330002fcc",
+      "gateway/routes/proxy.py": "d359d7a3196c6945d21f4431b7406cd380e02edefa1ae376ede6464c97b17908",
+      "gateway/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/tests/conftest.py": "c8fb81ed0f7efeeb0bf3d68bccad716e37b61ec6743e22f8d69be2f04e7af225",
+      "gateway/tests/test_admin.py": "4143fffba72d8352dd7c349cccfdec39f4ec010fd3885fa0086b8f03426452ac",
+      "gateway/tests/test_auth.py": "c0a053dc08b49e6c4e62631267a86d601c611a4c7c3db1adc5a26df517dcc9b0",
+      "gateway/tests/test_benchmark_routing.py": "dd8880c9095cd2be734e514f533afe411b242c5a3ba8e4aa497d886047dc1846",
+      "gateway/tests/test_cache.py": "4a4dc23e6b36f6030835bd54d96d746e07a375dd7966c1dc586fb89e0bc9739e",
+      "gateway/tests/test_experiment_conditions.py": "9a518985201f848d3ab8696e22a14a1ed2b058f997de48ad3b75652712393791",
+      "gateway/tests/test_hardening.py": "e1daeb0ace603c0dd6743274ec82bc478fd3f5a2395c6aae3ee916011a486b0d",
+      "gateway/tests/test_metrics.py": "d5bc197d626f2139169b06ab4f8b8418f631c147072a2d868444214b9464bd37",
+      "gateway/tests/test_network_detector.py": "21613f8463f8682e399d71e6b824706a533df7515f85472d67353461d5411255",
+      "gateway/tests/test_proxy.py": "d404a334cfa10f18889283d55f2e9e6ead897a957b36c93b61d49999eb16c95f",
+      "gateway/tests/test_rate_limit.py": "4a03d95383ab90f2d268a1216819518555df42047b9862a8f3b5298648ebb473",
+      "gateway/tests/test_request_logger.py": "1a11c9ab2af1f327f1a8e61a7db13e5e80af28709c3417b57f91c8e15aec0258",
+      "gateway/tests/test_response_modes.py": "24beebe3bf335ee7299267db8fa85ec27c612f63a579ab5ed2e166905649ff2f",
+      "gateway/tests/test_response_optimizer.py": "cb36d216de7c50370e4b88a8d2c9ed206104975a50db505c89f2b61ba75c462e",
+      "gateway/tests/test_rtt_state.py": "1bedea1f83e20b38dcb41fd0d5de177fb59d056ad61772ee4dc6e880faee799f",
+      "gateway/tests/test_security.py": "584e5234174b31f1d1621944b9add490e1068e2e7e74a31a0906adaa177ddc5b",
+      "gateway/tests/test_yaml_config.py": "9833b14e98975844dfb5c16e160599e642d1160f40f38e221d67af0685eaf929",
+      "gateway/utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gateway/utils/client_identity.py": "1676ef852e0f1cc63c2a50000608dfa87b5ff8f8edbfe251912419bb04206e83",
+      "gateway/utils/metrics.py": "b2dd0da44d881c2d9a8de3d3539aa50558504f16e4c2ccead8954f682da4285c",
+      "gateway/utils/proxy_http.py": "d653daa5a06eeec6e9f7f9ff671049aeff427b1d4da4f1cff35a51233628f036",
+      "gateway/utils/request_logger.py": "b0d284af52156bd4adb37395a74b88b9d07d4a74f7c5b864849f55adb0a45103",
+      "pyproject.toml": "7f316743a2ce8c364cb27e62816069cc3c0cfd9dc1c15aecbb39b74cce3c164c",
+      "requirements-dev.txt": "49e4ed52036436dccba67ccebc7c735cd1689c4fab2ee1a3895c077bad7b63fb",
+      "requirements.txt": "4d940c3f1aeed9947793fb74f7b6de5ad975385b850a0572064283a37f3b53a2"
+    },
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "started_utc": "2026-10-20T11:38:51.754509+00:00",
+  "status": "complete",
+  "workload": {
+    "client": "closed loop; new pool per block; gzip accepted; no retries/redirects/env proxy/cookies",
+    "concurrency": 2,
+    "expected_items": 100,
+    "fixture_canonical_sha256": "e135c0263d533bad77e8ae230748ff818f6e733ace9d4c30272a1ff7aef43960",
+    "method": "GET",
+    "name": "optional-heavy-items-v1",
+    "optional_fields": [
+      "body",
+      "meta.debug"
+    ],
+    "path": "/proxy/fixture/items",
+    "requests_per_block": 10,
+    "require_all_valid": false,
+    "required_fields": [
+      "id",
+      "title",
+      "meta.category"
+    ],
+    "timeout_seconds_per_io": 15.0,
+    "warmup_requests": 0
+  }
+}

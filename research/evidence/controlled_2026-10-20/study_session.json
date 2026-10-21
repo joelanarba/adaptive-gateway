@@ -1,0 +1,53 @@
+{
+  "concurrency": 2,
+  "condition_order": [
+    "GOOD",
+    "POOR",
+    "DEGRADED"
+  ],
+  "condition_order_shuffle_seed": 20261020,
+  "conditions": {
+    "DEGRADED": {
+      "collection_seconds": 215,
+      "measured": 320,
+      "recorded_operator_exits": {
+        "cleanup": 0,
+        "collection": 0,
+        "logging": 0,
+        "wrapper": 0
+      },
+      "valid": 317
+    },
+    "GOOD": {
+      "collection_seconds": 6,
+      "measured": 320,
+      "recorded_operator_exits": {
+        "cleanup": 0,
+        "collection": 0,
+        "logging": 0,
+        "wrapper": 0
+      },
+      "valid": 320
+    },
+    "POOR": {
+      "collection_seconds": 1008,
+      "measured": 320,
+      "recorded_operator_exits": {
+        "cleanup": 0,
+        "collection": 0,
+        "logging": 0,
+        "wrapper": 0
+      },
+      "valid": 313
+    }
+  },
+  "finished_utc": "2026-10-20T11:59:19Z",
+  "pilot_observations_included": false,
+  "requests_per_mode_per_trial": 10,
+  "schedule_seed": 20261018,
+  "source_revision": "14b5adfba91a0ee35205c7975f51e07a7a5e7570",
+  "started_utc": "2026-10-20T11:38:34Z",
+  "timeout_seconds_per_io": 15,
+  "trials_per_condition": 8,
+  "warmup": 0
+}
