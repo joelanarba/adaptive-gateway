@@ -1,17 +1,21 @@
 # Limitations and outstanding work
 
-These are explicit limits, not completed roadmap items.
+The EC2 study covers the four fixed response modes. Broader deployment and
+reliability checks remain outside its scope. Dependency findings below refer
+to the earlier recorded scans, which were not repeated for this study.
 
 - Python advisory scan after the approved upgrades reports no known findings in
   the checked local environment; this is not proof of security. See the recorded
   before/after report. Container-image scans remain pending.
 - Dashboard full dependency audit retains five high findings in one development-
-  only ESLint glob/braces chain; production audit is clean. No compatible fix is
-  available through npm without an older incompatible lint-config downgrade.
-- Tests use Python 3.12/SQLite/fake Redis/mock HTTP. Dashboard checks used Node 24; Node 22 images are unrun. CI declares 3.11/3.12, but
-  remote CI was not run here. Real PostgreSQL migrations/row locks, Redis AOF
-  crash recovery, cross-process leases, Nginx TLS and Compose startup are unverified
-  because no Docker engine is available.
+  only ESLint glob/braces chain; production audit is clean. No compatible fix was
+  identified in that review without an older incompatible lint-config downgrade.
+- The earlier local tests used Python 3.12/SQLite/fake Redis/mock HTTP and Node 24
+  for the dashboard. The [Quality workflow for evidence commit 266011c](https://github.com/joelanarba/adaptive-gateway/actions/runs/39536416813)
+  passed remotely. The EC2 study used live PostgreSQL and Redis, but did not test
+  migration/row-lock races, Redis AOF crash recovery, cross-process leases or
+  Nginx TLS. Node 22 container images and full production Compose startup have
+  not been verified by the study.
 - Passive classifier samples are server processing residuals, not actual client
   RTT. State transactions avoid stale overwrites but may skip samples after bounded contention retries. No regional classifier
   accuracy, bandwidth estimation or prediction claim is supported.
@@ -37,17 +41,23 @@ These are explicit limits, not completed roadmap items.
   it does not implement Redis EWMA, POOR skeletons, proxy/cache or queue semantics.
 - Preliminary EC2 evidence exists under research/evidence/preliminary_2026-10-18;
   it has only three main trials, reduced content and coupled interventions. See
-  HISTORICAL_EVIDENCE_AUDIT.md. New four-mode impaired results remain uncollected.
-  The controlled runner validates the known synthetic fixture, but cannot attest
-  remote server settings or external impairment, prove trial independence, measure
-  application utility, or establish significance. Synthetic optional-heavy data,
-  client validation CPU, host/process order and network placement can bias results.
-  Other older result files still lack provenance; no paper/publication claim follows.
+  HISTORICAL_EVIDENCE_AUDIT.md. The [20 October four-mode study](CONTROLLED_STUDY_RESULTS.md)
+  adds 960 attempts, 950 valid responses and ten retained transport failures across
+  all three conditions. It used one session on one host, with eight ten-request
+  trials per mode and condition. Each nearest-rank trial P95 is the maximum of
+  ten attempts. The small repetitive fixture favours compression and removal;
+  host/process order, shared services and client validation CPU may affect latency.
+  Saved qdisc records and operator attestations document the setup, but the runner
+  itself does not verify external impairment or server settings. The results do
+  not establish trial independence, application utility, significance, automatic
+  policy accuracy or maximum capacity. Transport-error causes remain unresolved.
+  Other older result files still lack provenance.
 - CloudFormation is an unverified host scaffold and does not deploy an application
-  automatically. No cloud resources, GitHub settings, commits or releases were made.
+  automatically. The recorded EC2 experiment does not validate that template or
+  establish a production deployment. No production release is claimed.
 - Repository history, existing credential exposure, full dependency licenses and
   third-party container vulnerabilities were not exhaustively audited.
 
-Next priority: execute disposable real-service tests; validate classifier inputs
-and add cache invalidation/coalescing;
-collect independently reproducible experiments with task-completeness metrics.
+Next priority: independent replication with less repetitive payloads and
+application task-completeness metrics; separate classifier and resource-cost
+evaluation; disposable real-service recovery tests and cache invalidation/coalescing.

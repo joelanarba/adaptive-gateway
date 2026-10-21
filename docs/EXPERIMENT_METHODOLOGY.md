@@ -12,8 +12,11 @@ alone is insufficient evidence of a useful application outcome.
 
 The preliminary EC2 evidence in `research/evidence/preliminary_2026-10-18/` remains
 immutable. See [the historical audit](HISTORICAL_EVIDENCE_AUDIT.md) for its limitations.
-No new network-impaired experiment was executed during this local implementation.
-Unit/mock/ASGI tests establish functionality, not measured network performance.
+The [20 October 2026 EC2 study](CONTROLLED_STUDY_RESULTS.md) subsequently collected
+960 attempts across all four fixed modes and all three link conditions. It used
+eight trials, ten requests per mode and trial, concurrency two and no warm-up.
+Its raw observations and recorded impairment checks are separate from local
+unit/mock/ASGI tests, which establish functionality rather than network performance.
 Older `benchmarks/results/` artifacts have separate, insufficient provenance.
 
 Use `benchmarks/run_study.py` for new controlled studies. `run_experiment.py` and
@@ -201,9 +204,11 @@ ports to 8002/8003/8004 respectively. Start the fixture with
 with a **new** output name. It remains an unimpaired functional experiment even
 with DEGRADED/POOR hints. This live local setup was not executed for this task.
 
-## Later on EC2/Linux only (not executed locally)
+## Collection on EC2/Linux
 
-Use [the EC2 runbook](EC2_RESEARCH_RUNBOOK.md) after publishing the reviewed commit.
+Use [the EC2 runbook](EC2_RESEARCH_RUNBOOK.md) for a new collection after publishing
+the reviewed source. The completed study and its deviations from the larger
+example are recorded in the [results report](CONTROLLED_STUDY_RESULTS.md).
 It covers master/commit verification, existing untracked files and old services,
 shared fixture/settings, health plus body validation, a strict smoke gate, verified
 server-egress impairment on agw-link, the exact full-study command, and cleanup.
@@ -228,5 +233,10 @@ mode-to-process assignment, warm-up, one-way loss/delay and time-varying bandwid
 remain threats. Netem parameters are not measured RTT or a mobile trace. Required
 fields are a workload-specific contract, not a universal data schema. Unsupported
 content codings and other workloads need a new versioned protocol. Independent
-reproduction, realistic workloads, server resource measurements and impaired
-four-mode data remain pending. Use [the results template](RESULTS_TEMPLATE.md).
+reproduction, realistic workloads and server resource measurements remain pending.
+The first impaired four-mode dataset is described in the
+[results report](CONTROLLED_STUDY_RESULTS.md). Its eight ten-request trials per
+condition support descriptive comparisons; with nearest-rank percentiles, each
+trial P95 is the maximum of ten attempts. No population tail estimate, significance
+or automatic-policy benefit follows. Use [the results template](RESULTS_TEMPLATE.md)
+to keep future studies separate.

@@ -1,5 +1,10 @@
 # Final pre-push review
 
+This document records the local review before EC2 collection. The later
+[20 October 2026 study](CONTROLLED_STUDY_RESULTS.md) supplies the four-mode
+experiment results. Capacity remains unverified; the later measurements do not
+change the scope or recorded test results of this review.
+
 Scope: local source/documentation review only. No commit, push, EC2 connection,
 Docker execution or live network experiment. Publication commands are in
 [PUBLISHING.md](PUBLISHING.md); later host deployment/collection commands are in

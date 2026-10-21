@@ -7,9 +7,11 @@ JSON responses, with optional gzip, Redis caching and an opt-in write queue.
 
 For backend developers and distributed-systems students studying the tradeoff
 between transmitted bytes, response completeness, latency and server overhead.
-It is a portfolio/research prototype, **not production-ready or research-validated**.
-Performance results are pending. See [the audit](docs/PROJECT_AUDIT.md) for verification, dependency scan results
-and remaining deployment checks.
+It is a portfolio/research prototype. A [controlled EC2 study](docs/CONTROLLED_STUDY_RESULTS.md)
+compares four fixed response modes across three link conditions, with 960 measured
+attempts and 950 valid responses. The results describe one synthetic workload;
+production readiness and automatic policy accuracy remain unverified. See
+[the audit](docs/PROJECT_AUDIT.md) for the earlier software review and dependency checks.
 
 ## Architecture
 
@@ -251,7 +253,13 @@ controls, validated raw observations, repeated seeded trials and raw-derived
 analysis. `RESPONSE_MODE` selects the operator policy; the default remains adaptive.
 The legacy CSV runners and two-process Compose experiment remain available for
 compatibility. Local tests/offline preparation need no Docker. Linux impairment
-commands are documented for later execution; no new impaired results are claimed.
+commands are documented in the EC2 runbook. The
+[20 October 2026 results](docs/CONTROLLED_STUDY_RESULTS.md) include raw-data-derived
+latency, byte counts, completeness and every failed attempt. Gzip alone retained
+the full fixture at 1,534 encoded body bytes, compared with 265,081 uncompressed;
+combined removal and gzip used 561 bytes with field coverage reduced to 60%.
+Lower latency was observed on the impaired links, with no consistent advantage
+on the clean link. These fixed-mode results do not evaluate automatic selection.
 The [preliminary EC2 evidence](research/evidence/preliminary_2026-10-18/README.md)
 is preserved with [an explicit limitations audit](docs/HISTORICAL_EVIDENCE_AUDIT.md).
 Older `benchmarks/results/` files have unverified provenance. All new studies
@@ -264,16 +272,18 @@ For later host collection, use [the four-mode EC2 runbook](docs/EC2_RESEARCH_RUN
 
 [Audit](docs/PROJECT_AUDIT.md) · [Architecture](ARCHITECTURE.md) ·
 [Security](docs/SECURITY.md) · [Limitations](docs/LIMITATIONS.md) ·
+[Study results](docs/CONTROLLED_STUDY_RESULTS.md) ·
 [Results template](docs/RESULTS_TEMPLATE.md) · [Contributing](CONTRIBUTING.md)
 
 Next work: live PostgreSQL migrations and concurrent refresh tests; Redis
 crash/claim fault injection; classifier validation; cold-miss coalescing and write
-invalidation; measured experiments
-with confidence intervals and independent reproduction. The CloudFormation file
+invalidation; independent replication, realistic payloads and application task
+completeness. Resource costs and capacity still need measurement. The CloudFormation file
 is a host scaffold, not a one-click application deployment. Python and npm
 production advisory checks are clean as of the recorded scan;
-five high findings remain in a development-only lint dependency chain. No cloud
-resources, repository release or research publication are claimed.
+five high findings remain in a development-only lint dependency chain in that scan.
+The EC2 evidence is published on its research branch; the project has no claimed
+peer-reviewed publication or production release.
 
 Project code is [MIT licensed](LICENSE). Dependencies and container images retain
 their respective licenses; no blanket third-party license audit is claimed.

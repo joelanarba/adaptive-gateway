@@ -18,27 +18,52 @@ Treat these as preliminary observations with different response completeness,
 coupled interventions, missing content/encoding validation and two unclassified
 transport failures. No general benefit or statistical significance is established.
 
-## 2. Newly executed experiments
+## 2. Completed controlled study
 
-Network-impaired four-mode results: **not collected during this implementation**.
-Local unit/mock/ASGI verification is software validation, not a latency result.
-Offline prepared manifests are plans, not observations. Fill this section only
-after executing and validating a new study; retain every original raw artifact.
+The [20 October 2026 report](CONTROLLED_STUDY_RESULTS.md) covers full,
+compression, removal and combined modes under GOOD, DEGRADED and POOR link
+conditions. It contains the method, latency and body-size tables, paired
+comparisons, failures, figures and limitations.
 
-Study directory and raw SHA-256: pending
-Runner revision/dirty state, actual server revision/config: pending
-Fixture hash, mode/process/port mapping and client schedule seed: pending
-Environment/hardware/CPU limits, datastores and competing load: pending
-Verified impairment/topology/MTU and pre/post qdisc/counters: pending
-Trials, requests, concurrency, per-I/O timeout, warm-up rule: pending
-Protocol deviations, interrupted/excluded runs and rationale: pending
+| Condition | Measured attempts | Valid responses | Incomplete transfers | Recorded timeouts |
+| --- | --- | --- | --- | --- |
+| GOOD | 320 | 320 | 0 | 0 |
+| DEGRADED | 320 | 317 | 3 | 0 |
+| POOR | 320 | 313 | 7 | 0 |
+| Total | 960 | 950 | 10 | 0 |
+
+The [published evidence](https://github.com/joelanarba/adaptive-gateway/tree/266011cbef7e06fa32d81530e09d8ff829e7670b/research/evidence/controlled_2026-10-20)
+uses source revision `14b5adfba91a0ee35205c7975f51e07a7a5e7570`. There are eight
+trials per condition, ten requests per mode and trial, concurrency two, no
+warm-up and a 15-second per-I/O timeout. Mode-order seed: `20261018`.
+The original raw files are preserved; all ten failures remain in the latency
+analysis. Pilots and historical data are excluded.
+
+This is a descriptive fixed-mode comparison. Automatic policy accuracy,
+application utility, resource costs and capacity have not been measured.
+Local unit/mock/ASGI tests and successful CI are software validation, separate
+from the EC2 measurements. Offline prepared manifests remain plans, not results.
+
+## 3. Template for a future study
+
+Use a new report and output directory rather than replacing the completed study.
+Fill these fields from the new study's evidence; leave unmeasured quantities
+explicitly unmeasured.
+
+- Study directory, source revision and raw SHA-256.
+- Runner dirty state, operator-attested server revision and configuration.
+- Fixture hash, mode/process/port mapping and schedule seed.
+- Environment, hardware/CPU limits, datastores and competing load.
+- Impairment, topology/MTU, verification procedure and pre/post qdisc/counters.
+- Trials, requests, concurrency, timeout and warm-up rule.
+- Protocol deviations, interrupted/excluded runs and reasons for exclusion.
 
 | Condition | Mode | Trials / attempts | HTTP success / timeout | Valid responses | Encoded / decoded bytes (valid) | Item retention / field coverage | Trial P50 / P95, all attempts |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| pending | full | pending | pending | pending | pending | pending | pending |
-| pending | compression | pending | pending | pending | pending | pending | pending |
-| pending | removal | pending | pending | pending | pending | pending | pending |
-| pending | combined | pending | pending | pending | pending | pending | pending |
+| To record | full | To record | To record | To record | To record | To record | To record |
+| To record | compression | To record | To record | To record | To record | To record | To record |
+| To record | removal | To record | To record | To record | To record | To record | To record |
+| To record | combined | To record | To record | To record | To record | To record | To record |
 
 Repeat for GOOD/DEGRADED/POOR; optional adaptive policy goes in a separate row.
 Report per-trial observations and means/sample stddev/range, valid denominators,
@@ -46,19 +71,18 @@ all-attempt and successful-only latency, error categories and content-validation
 failures. Distinguish the mean of trial percentiles from pooled percentiles.
 Report missing/unmeasurable cells as missing, never zero.
 
-Paired contrasts (treatment-reference, absolute units): pending.
-Observed uncertainty/spread and independence assessment: pending.
-H1 size, H2 latency/errors, H3 completeness, H4 separate mechanisms: pending.
-Application utility and server/client resource costs: pending.
+Record paired contrasts in absolute units, trial spread and the independence
+assessment. Discuss H1 size, H2 latency/errors, H3 completeness and H4 separate
+mechanisms. State whether application utility or resource costs were measured.
 No significance/CI claim without a prespecified justified inferential design.
 
-## 3. Results still to collect
+## 4. Results still to collect
 
-- Verified impaired four-mode trials for all three conditions, with independent
-  replication and justified sample size; optional separate adaptive-policy study.
+- Independent replication across sessions/hosts, with justified sample sizes;
+  a separate adaptive-policy study if making claims about automatic selection.
 - Realistic less-repetitive payloads and application-specific utility/completeness.
 - Server resource overhead and client measurement overhead under representative load.
 - Cache/freshness/outage behavior and classifier accuracy under separate protocols.
 
-Interpretation, threats to validity, independent reproduction and writing-sample
-conclusions remain pending. An omitted field is not semantically equivalent content.
+Interpret each new dataset separately before comparing it with earlier studies.
+An omitted field is not semantically equivalent content.
